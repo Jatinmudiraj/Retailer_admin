@@ -28,7 +28,7 @@ services:
         fromService:
           type: web
           name: royaliq-frontend
-          property: url
+          property: host
 
   # -----------------------------
   # FRONTEND SERVICE (React/Vite)
@@ -45,4 +45,4 @@ services:
         fromService:
           type: web
           name: royaliq-backend
-          property: url
+          property: host

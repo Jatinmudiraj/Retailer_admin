@@ -60,9 +60,14 @@ BUFFER_DIR.mkdir(parents=True, exist_ok=True)
 
 app = FastAPI(title="RoyalIQ Retailer Admin", version="1.0")
 
+# Handle Render's "host" property (which lacks https://)
+allow_origin = settings.FRONTEND_ORIGIN
+if allow_origin and not allow_origin.startswith("http"):
+    allow_origin = f"https://{allow_origin}"
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[settings.FRONTEND_ORIGIN],
+    allow_origins=[allow_origin],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

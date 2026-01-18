@@ -1,4 +1,7 @@
-const API_BASE = import.meta.env.VITE_API_BASE_URL || "";
+let API_BASE = import.meta.env.VITE_API_BASE_URL || "";
+if (API_BASE && !API_BASE.startsWith("http")) {
+    API_BASE = `https://${API_BASE}`;
+}
 
 export async function apiGet<T>(path: string): Promise<T> {
     const res = await fetch(`${API_BASE}${path}`, { credentials: "include" });
