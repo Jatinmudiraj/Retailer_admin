@@ -199,6 +199,11 @@ def _product_out(db: Session, p: Product) -> ProductOut:
     )
 
 
+@app.get("/")
+def root():
+    return {"message": "RoyalIQ Retailer Admin Backend is Running!"}
+
+
 @app.get("/health")
 def health(db: Session = Depends(get_db)) -> Dict[str, Any]:
     return {
@@ -225,15 +230,9 @@ import traceback
 
 @app.post("/auth/google")
 def auth_google(payload: GoogleCredentialIn):
-    log_path = r"d:\sachin\RoyalIQ-RetailerAdmin\backend\auth_debug_log.txt"
     try:
-        with open(log_path, "a") as f: f.write("Auth start\n")
-        
         user = verify_google_credential(payload.credential)
-        with open(log_path, "a") as f: f.write(f"User verified: {user.email}\n")
-        
         token = make_session_token(user)
-        with open(log_path, "a") as f: f.write("Token created\n")
 
         resp = JSONResponse({"ok": True, "user": user.model_dump()})
         resp.set_cookie(
@@ -244,12 +243,9 @@ def auth_google(payload: GoogleCredentialIn):
             secure=bool(int(settings.COOKIE_SECURE)),
             max_age=24 * 3600,
         )
-        with open(log_path, "a") as f: f.write("Cookie set, returning\n")
         return resp
     except Exception as e:
-        with open(log_path, "a") as f:
-            f.write(f"ERROR: {str(e)}\n")
-            f.write(traceback.format_exc())
+        print(f"Auth Error: {e}")
         # Re-raise so FastAPI still returns 500
         raise
 
