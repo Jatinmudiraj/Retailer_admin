@@ -49,16 +49,26 @@ from app.schemas import (
     CustomerIn, CustomerOut, OrderIn, OrderOut,
 )
 
+from contextlib import asynccontextmanager
+
 settings = get_settings()
 
-Base.metadata.create_all(bind=engine)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Startup: Create DB tables
+    try:
+        Base.metadata.create_all(bind=engine)
+        print("Database tables created.")
+    except Exception as e:
+        print(f"Error creating database tables: {e}")
+        # We don't raise here to allow the app to start (and log the error),
+        # but in production you might want to stop.
+        # For debugging deployment, this is better.
+    
+    yield
+    # Shutdown logic if needed
 
-MEDIA_DIR = Path(settings.MEDIA_DIR).resolve()
-MEDIA_DIR.mkdir(parents=True, exist_ok=True)
-BUFFER_DIR = MEDIA_DIR / "buffer"
-BUFFER_DIR.mkdir(parents=True, exist_ok=True)
-
-app = FastAPI(title="RoyalIQ Retailer Admin", version="1.0")
+app = FastAPI(title="RoyalIQ Retailer Admin", version="1.0", lifespan=lifespan)
 
 # Handle Render's "host" property (which lacks https://)
 allow_origin = settings.FRONTEND_ORIGIN
