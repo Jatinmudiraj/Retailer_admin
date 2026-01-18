@@ -1,0 +1,5 @@
+Testing Bucket: retail-app-bucket58, Region: eu-north-1
+Uploading test_verification_001.txt...
+Upload Successful.
+Cleanup Successful.
+RESULT: SUCCESS
