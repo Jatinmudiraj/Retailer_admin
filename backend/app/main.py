@@ -53,6 +53,11 @@ from contextlib import asynccontextmanager
 
 settings = get_settings()
 
+MEDIA_DIR = Path(settings.MEDIA_DIR).resolve()
+MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+BUFFER_DIR = MEDIA_DIR / "buffer"
+BUFFER_DIR.mkdir(parents=True, exist_ok=True)
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup: Create DB tables
