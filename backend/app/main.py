@@ -76,13 +76,13 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="RoyalIQ Retailer Admin", version="1.0", lifespan=lifespan)
 
 # Handle Render's "host" property (which lacks https://)
-allow_origin = settings.FRONTEND_ORIGIN
-if allow_origin and not allow_origin.startswith("http"):
-    allow_origin = f"https://{allow_origin}"
+# Strict allow_origins list can be brittle.
+# We'll use a regex to allow any Render subdomain + localhost
+origins_regex = r"https://.*\.onrender\.com|http://localhost:\d+"
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[allow_origin],
+    allow_origin_regex=origins_regex,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
