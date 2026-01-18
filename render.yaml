@@ -26,14 +26,14 @@ services:
         sync: false
       - key: FRONTEND_ORIGIN
         fromService:
-          type: static
+          type: web
           name: royaliq-frontend
           property: url
 
   # -----------------------------
   # FRONTEND SERVICE (React/Vite)
   # -----------------------------
-  - type: static
+  - type: web
     name: royaliq-frontend
     env: static
     rootDir: frontend
