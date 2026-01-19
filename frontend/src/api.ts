@@ -6,6 +6,12 @@ console.log("RoyalIQ Configuration:");
 console.log(" - API BASE URL:", API_BASE);
 console.log(" - Mode:", import.meta.env.MODE);
 
+export type AdminUser = {
+    email: string;
+    name?: string | null;
+    picture?: string | null;
+};
+
 export async function apiGet<T>(path: string): Promise<T> {
     const res = await fetch(`${API_BASE}${path}`, { credentials: "include" });
     if (!res.ok) {
@@ -49,4 +55,12 @@ export async function apiDelete<T>(path: string): Promise<T> {
         throw new Error(`DELETE ${path} failed: ${res.status} ${txt}`);
     }
     return res.json() as Promise<T>;
+}
+
+export async function authLogin(data: any) {
+    return apiPost<{ ok: boolean; user: AdminUser }>("/auth/login", data);
+}
+
+export async function authSignup(data: any) {
+    return apiPost<{ ok: boolean; user: AdminUser }>("/auth/signup", data);
 }

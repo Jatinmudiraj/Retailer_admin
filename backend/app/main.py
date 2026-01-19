@@ -17,7 +17,15 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
-from app.auth import COOKIE_NAME, get_current_admin, make_session_token, verify_google_credential
+from app.auth import (
+    COOKIE_NAME, 
+    get_current_admin, 
+    make_session_token, 
+    verify_google_credential,
+    get_password_hash,
+    verify_password,
+    _allowed_email
+)
 from app.config import get_settings
 from app.db import engine, get_db
 from app.models import Base, Feedback, Product, ProductImage, Rating, SaleArchive, Setting, WishlistRequest, S3DeletionQueue, Customer, Order, OrderItem
@@ -261,6 +269,68 @@ def logout():
 def me(request: Request):
     user = get_current_admin(request)
     return {"ok": True, "user": user.model_dump()}
+
+
+@app.post("/auth/signup")
+def signup(payload: SignupIn, db: Session = Depends(get_db)):
+    # 1. Check if allowed
+    if not _allowed_email(payload.email):
+        raise HTTPException(status_code=403, detail="Email not allowed for retailer admin")
+
+    # 2. Check if exists
+    exists = db.query(AdminAccount).filter(AdminAccount.email == payload.email.lower().strip()).first()
+    if exists:
+        raise HTTPException(status_code=409, detail="Account already exists")
+
+    # 3. Create
+    hashed = get_password_hash(payload.password)
+    acc = AdminAccount(
+        email=payload.email.lower().strip(),
+        hashed_password=hashed,
+        name=payload.name,
+        created_at=datetime.utcnow()
+    )
+    db.add(acc)
+    db.commit()
+
+    user = AdminUser(email=acc.email, name=acc.name)
+    token = make_session_token(user)
+
+    resp = JSONResponse({"ok": True, "user": user.model_dump()})
+    resp.set_cookie(
+        key=COOKIE_NAME,
+        value=token,
+        httponly=True,
+        samesite="lax",
+        secure=bool(int(settings.COOKIE_SECURE)),
+        max_age=24 * 3600,
+    )
+    return resp
+
+
+@app.post("/auth/login")
+def auth_login(payload: LoginIn, db: Session = Depends(get_db)):
+    email = payload.email.lower().strip()
+    acc = db.query(AdminAccount).filter(AdminAccount.email == email).first()
+    if not acc:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+
+    if not verify_password(payload.password, acc.hashed_password):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+
+    user = AdminUser(email=acc.email, name=acc.name, picture=acc.picture)
+    token = make_session_token(user)
+
+    resp = JSONResponse({"ok": True, "user": user.model_dump()})
+    resp.set_cookie(
+        key=COOKIE_NAME,
+        value=token,
+        httponly=True,
+        samesite="lax",
+        secure=bool(int(settings.COOKIE_SECURE)),
+        max_age=24 * 3600,
+    )
+    return resp
 
 
 # -----------------------

@@ -4,6 +4,7 @@ import time
 from typing import Optional, Tuple
 
 import jwt
+import bcrypt
 from fastapi import HTTPException, Request
 from google.auth.transport import requests as grequests
 from google.oauth2 import id_token
@@ -32,6 +33,19 @@ def _allowed_email(email: str) -> bool:
                 return True
     # If neither list provided, deny by default
     return False
+
+
+def get_password_hash(password: str) -> str:
+    pwd_bytes = password.encode('utf-8')
+    salt = bcrypt.gensalt()
+    hashed = bcrypt.hashpw(pwd_bytes, salt)
+    return hashed.decode('utf-8')
+
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    pwd_bytes = plain_password.encode('utf-8')
+    hashed_bytes = hashed_password.encode('utf-8')
+    return bcrypt.checkpw(pwd_bytes, hashed_bytes)
 
 
 def verify_google_credential(credential: str) -> AdminUser:

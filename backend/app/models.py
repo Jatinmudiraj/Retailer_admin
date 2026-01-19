@@ -192,3 +192,12 @@ class OrderItem(Base):
     price: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
 
     order = relationship("Order", back_populates="items")
+
+
+class AdminAccount(Base):
+    __tablename__ = "admin_accounts"
+    email: Mapped[str] = mapped_column(String(120), primary_key=True)
+    hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
+    name: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    picture: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)

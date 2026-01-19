@@ -16,6 +16,17 @@ class GoogleCredentialIn(BaseModel):
     credential: str
 
 
+class LoginIn(BaseModel):
+    email: str
+    password: str
+
+
+class SignupIn(BaseModel):
+    email: str
+    password: str
+    name: Optional[str] = None
+
+
 class ProductIn(BaseModel):
     sku: str = Field(..., min_length=1, max_length=120)
     name: str = Field(..., min_length=1, max_length=240)
