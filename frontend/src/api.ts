@@ -2,9 +2,19 @@ let API_BASE = import.meta.env.VITE_API_BASE_URL || "";
 if (API_BASE && !API_BASE.startsWith("http")) {
     API_BASE = `https://${API_BASE}`;
 }
+
+// Ensure no trailing slash on base
+if (API_BASE.endsWith("/")) {
+    API_BASE = API_BASE.slice(0, -1);
+}
+
 console.log("RoyalIQ Configuration:");
 console.log(" - API BASE URL:", API_BASE);
 console.log(" - Mode:", import.meta.env.MODE);
+
+if (!API_BASE) {
+    console.error("WARNING: VITE_API_BASE_URL is not set! API calls will likely fail.");
+}
 
 export type AdminUser = {
     email: string;
