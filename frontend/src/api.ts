@@ -8,13 +8,23 @@ if (API_BASE.endsWith("/")) {
     API_BASE = API_BASE.slice(0, -1);
 }
 
-console.log("RoyalIQ Configuration:");
-console.log(" - API BASE URL:", API_BASE);
-console.log(" - Mode:", import.meta.env.MODE);
+// FIX: If the Env Var is just the internal service name (Render default "host"),
+// the browser cannot resolve it. We must force the public .onrender.com URL.
+if (API_BASE === "https://royaliq-backend" || API_BASE === "http://royaliq-backend") {
+    console.warn("Detected internal Render hostname. Switching to public URL.");
+    API_BASE = "https://royaliq-backend.onrender.com";
+}
 
 if (!API_BASE) {
     console.error("WARNING: VITE_API_BASE_URL is not set! API calls will likely fail.");
+    // Fallback for safety
+    if (import.meta.env.MODE === "production") {
+        API_BASE = "https://royaliq-backend.onrender.com";
+    }
 }
+
+console.log("RoyalIQ Configuration:");
+console.log(" - API BASE URL:", API_BASE);
 
 export type AdminUser = {
     email: string;
