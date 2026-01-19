@@ -73,11 +73,24 @@ async def lifespan(app: FastAPI):
     try:
         Base.metadata.create_all(bind=engine)
         print("Database tables created.")
+        
+        # Seed default admin if it doesn't exist
+        with Session(engine) as db:
+            default_email = "jatinmudiraj126@gmail.com"
+            exists = db.query(AdminAccount).filter(AdminAccount.email == default_email).first()
+            if not exists:
+                hashed = get_password_hash("123")
+                admin = AdminAccount(
+                    email=default_email,
+                    hashed_password=hashed,
+                    name="Jatin Mudiraj",
+                    created_at=datetime.utcnow()
+                )
+                db.add(admin)
+                db.commit()
+                print(f"Default admin {default_email} created.")
     except Exception as e:
-        print(f"Error creating database tables: {e}")
-        # We don't raise here to allow the app to start (and log the error),
-        # but in production you might want to stop.
-        # For debugging deployment, this is better.
+        print(f"Error creating database tables or seeding: {e}")
     
     yield
     # Shutdown logic if needed
