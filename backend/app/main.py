@@ -28,7 +28,7 @@ from app.auth import (
 )
 from app.config import get_settings
 from app.db import engine, get_db
-from app.models import Base, Feedback, Product, ProductImage, Rating, SaleArchive, Setting, WishlistRequest, S3DeletionQueue, Customer, Order, OrderItem
+from app.models import Base, Feedback, Product, ProductImage, Rating, SaleArchive, Setting, WishlistRequest, S3DeletionQueue, Customer, Order, OrderItem, AdminAccount
 from app.s3_service import (
     upload_file_to_s3, 
     generate_presigned_upload_url, 
@@ -55,6 +55,7 @@ from app.schemas import (
     PresignedUrlResponse,
     ImageFinalizeIn,
     CustomerIn, CustomerOut, OrderIn, OrderOut,
+    LoginIn, SignupIn,
 )
 
 from contextlib import asynccontextmanager
