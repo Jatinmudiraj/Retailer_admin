@@ -84,3 +84,82 @@ export async function authLogin(data: any) {
 export async function authSignup(data: any) {
     return apiPost<{ ok: boolean; user: AdminUser }>("/auth/signup", data);
 }
+
+// -----------------------
+// Public Shop API
+// -----------------------
+export type PublicProduct = {
+    sku: string;
+    name: string;
+    description?: string;
+    category?: string;
+    weight_g?: number;
+    price?: number;
+    images: { url: string; is_primary: boolean }[];
+    related_products?: string[];
+};
+
+export async function publicListProducts(q?: string, category?: string) {
+    const params = new URLSearchParams();
+    if (q) params.append("q", q);
+    if (category) params.append("category", category);
+    params.append("limit", "1000");
+    return apiGet<PublicProduct[]>(`/public/products?${params.toString()}`);
+}
+
+export async function publicGetProduct(sku: string) {
+    return apiGet<PublicProduct>(`/public/products/${sku}`);
+}
+
+export async function publicCreateOrder(data: {
+    customer_name: string;
+    customer_phone: string;
+    items: { sku: string; qty: number; price: number }[];
+}) {
+    return apiPost("/public/orders", data);
+}
+
+// -----------------------
+// Customer Auth
+// -----------------------
+export type CustomerUser = {
+    id: string;
+    name: string;
+    phone: string;
+    role: "customer";
+};
+
+export async function customerSignup(data: { phone: string; password: string; name: string; email?: string }) {
+    return apiPost<{ ok: boolean; user: CustomerUser }>("/auth/customer/signup", data);
+}
+
+export async function customerLogin(data: { phone: string; password: string }) {
+    return apiPost<{ ok: boolean; user: CustomerUser }>("/auth/customer/login", data);
+}
+
+export async function customerLogout() {
+    return apiPost("/auth/customer/logout", {});
+}
+
+export async function customerMe() {
+    return apiGet<{ ok: boolean; user: CustomerUser }>("/auth/customer/me");
+}
+
+export type CustomerGoogleAuthResult = {
+    ok: boolean;
+    status: "success" | "need_phone";
+    user?: CustomerUser;
+    google_profile?: { email: string; name: string; picture?: string };
+};
+
+export async function customerGoogleAuth(credential: string) {
+    return apiPost<CustomerGoogleAuthResult>("/auth/customer/google", { credential });
+}
+
+export async function createPaymentOrder(amount: number) {
+    return apiPost<{ ok: boolean; order_id: string; amount: number; currency: string; key_id: string }>("/payment/create_order", { amount });
+}
+
+export async function verifyPayment(data: { razorpay_order_id: string; razorpay_payment_id: string; razorpay_signature: string; total_amount: number }) {
+    return apiPost<{ ok: boolean; order_id: string; status: string }>("/payment/verify", data);
+}

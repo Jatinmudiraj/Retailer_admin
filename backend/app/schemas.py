@@ -27,6 +27,40 @@ class SignupIn(BaseModel):
     name: Optional[str] = None
 
 
+class CustomerSignupIn(BaseModel):
+    phone: str
+    password: str
+    name: str
+    email: Optional[str] = None
+
+
+class CustomerLoginIn(BaseModel):
+    phone: str
+    password: str
+
+
+class CustomerGoogleAuthIn(BaseModel):
+    credential: str
+
+
+class CustomerGoogleAuthOut(BaseModel):
+    ok: bool
+    status: str  # "success" or "need_phone"
+    user: Optional[dict] = None  # if success
+    google_profile: Optional[dict] = None  # if need_phone
+
+
+class PaymentOrderIn(BaseModel):
+    amount: float
+    currency: str = "INR"
+
+class PaymentVerifyIn(BaseModel):
+    razorpay_order_id: str
+    razorpay_payment_id: str
+    razorpay_signature: str
+    total_amount: float = 0.0
+
+
 class ProductIn(BaseModel):
     sku: str = Field(..., min_length=1, max_length=120)
     name: str = Field(..., min_length=1, max_length=240)
@@ -42,6 +76,12 @@ class ProductIn(BaseModel):
     manual_rating: Optional[float] = None
     terms: Optional[str] = None
     options: Optional[dict] = None
+
+
+class ProductImageOut(BaseModel):
+    s3_key: str
+    url: Optional[str] = None
+    is_primary: bool = False
 
 
 class ProductOut(BaseModel):
@@ -64,10 +104,12 @@ class ProductOut(BaseModel):
     updated_at: datetime
     is_archived: bool
     primary_image: Optional[str] = None
+    images: List[ProductImageOut] = []  # Added images list
     bayesian_rating: Optional[float] = None
     rating_count: int = 0
     retail_valuation_inr: Optional[float] = None
     status_zone: Optional[str] = None  # Fresh/Watch/Dead/Reserved
+    related_products: List[str] = []  # List of SKUs
 
 
 class ReserveIn(BaseModel):
@@ -177,6 +219,13 @@ class OrderIn(BaseModel):
     customer_id: str
     items: List[OrderItemIn]
     status: str = "PENDING"
+
+
+class PublicOrderIn(BaseModel):
+    # Combined Customer + Order info for checkout
+    customer_name: str
+    customer_phone: str
+    items: List[OrderItemIn]
 
 
 class OrderOut(BaseModel):

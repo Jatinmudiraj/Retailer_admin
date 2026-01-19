@@ -13,7 +13,7 @@ export default function Layout(props: { user: AdminUser; children: React.ReactNo
     }
 
     const navItems = [
-        { path: "/", label: "Control Center" },
+        { path: "/admin", label: "Control Center" },
         { path: "/vault", label: "Vault & Concepts" },
         { path: "/products/add", label: "Add Product" },
         { path: "/batch", label: "Batch Sourcing" },

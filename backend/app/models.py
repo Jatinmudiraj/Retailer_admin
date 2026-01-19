@@ -164,6 +164,7 @@ class Customer(Base):
     name: Mapped[str] = mapped_column(String(120), nullable=False)
     phone: Mapped[str] = mapped_column(String(40), nullable=False)
     email: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
+    hashed_password: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
     notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
 

@@ -13,11 +13,9 @@ from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile, 
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 import base64
-from google.auth.transport import requests as grequests
-from google.oauth2 import id_token
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import func, or_
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session
 
 from app.auth import (
     COOKIE_NAME, 
@@ -243,14 +241,6 @@ def _product_out(db: Session, p: Product) -> ProductOut:
         rating_count=r_count,
         retail_valuation_inr=(round(float(val), 2) if val is not None else None),
         status_zone=zone,
-        images=[
-            {
-                "s3_key": i.s3_key or "",
-                "url": (generate_presigned_get_url(i.s3_key) if i.s3_key else (i.url or (f"/media/{i.path.lstrip('/')}" if i.path else (f"/images/{i.id}" if i.image_data else None)))),
-                "is_primary": i.is_primary
-            }
-            for i in p.images
-        ]
     )
 
 
@@ -526,7 +516,7 @@ def customer_google_auth(payload: CustomerGoogleAuthIn, db: Session = Depends(ge
         print(f"Google Verify Error (Type: {type(e)}): {e}")
         import traceback
         traceback.print_exc()
-        raise HTTPException(status_code=401, detail=f"Google Authentication Failed: {str(e)}")
+        raise HTTPException(status_code=401, detail="Google Authentication Failed")
     
     email = (info.get("email") or "").lower().strip()
     name = info.get("name")
@@ -924,7 +914,7 @@ def public_get_product(sku: str, db: Session = Depends(get_db)):
         out = _product_out(db, p)
         
         # Get recommendations if model is trained
-        if recommender.model is not None:
+        if recommender.matrix is not None:
             related_skus = recommender.get_recommendations(sku)
             out.related_products = related_skus
         
@@ -1575,13 +1565,8 @@ def create_customer(payload: CustomerIn, request: Request, db: Session = Depends
 @app.get("/orders")
 def list_orders(request: Request, db: Session = Depends(get_db)):
     _ = get_current_admin(request)
-    orders = (
-        db.query(Order)
-        .options(joinedload(Order.customer), joinedload(Order.items))
-        .order_by(Order.created_at.desc())
-        .limit(100)
-        .all()
-    )
+    orders = db.query(Order).order_by(Order.created_at.desc()).limit(100).all()
+    # Eager loading manually or via ORM if relationships set up correctly (they are)
     return orders
 
 
@@ -1658,44 +1643,44 @@ RAZORPAY_KEY_SECRET = os.getenv("RAZORPAY_KEY_SECRET", "s4Sj5Ad8I870123")
 
 client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
 
-# @app.post("/payment/create_order")
-# def create_payment_order(payload: PaymentOrderIn, db: Session = Depends(get_db), cust: Customer = Depends(get_current_customer)):
-#     try:
-#         data = {
-#             "amount": int(payload.amount * 100),
-#             "currency": payload.currency,
-#             "receipt": f"receipt_{cust.id}_{int(datetime.utcnow().timestamp())}",
-#             "payment_capture": 1
-#         }
-#         order = client.order.create(data=data)
-#         return {"ok": True, "order_id": order['id'], "amount": order['amount'], "currency": order['currency'], "key_id": RAZORPAY_KEY_ID}
-#     except Exception as e:
-#         print(f"Razorpay Error: {e}")
-#         raise HTTPException(status_code=500, detail="Payment creation failed")
+@app.post("/payment/create_order")
+def create_payment_order(payload: PaymentOrderIn, db: Session = Depends(get_db), cust: Customer = Depends(get_current_customer)):
+    try:
+        data = {
+            "amount": int(payload.amount * 100),
+            "currency": payload.currency,
+            "receipt": f"receipt_{cust.id}_{int(datetime.utcnow().timestamp())}",
+            "payment_capture": 1
+        }
+        order = client.order.create(data=data)
+        return {"ok": True, "order_id": order['id'], "amount": order['amount'], "currency": order['currency'], "key_id": RAZORPAY_KEY_ID}
+    except Exception as e:
+        print(f"Razorpay Error: {e}")
+        raise HTTPException(status_code=500, detail="Payment creation failed")
 
-# @app.post("/payment/verify")
-# def verify_payment(payload: PaymentVerifyIn, db: Session = Depends(get_db), cust: Customer = Depends(get_current_customer)):
-#     try:
-#         # Verify Signature
-#         client.utility.verify_payment_signature({
-#             'razorpay_order_id': payload.razorpay_order_id,
-#             'razorpay_payment_id': payload.razorpay_payment_id,
-#             'razorpay_signature': payload.razorpay_signature
-#         })
-#         
-#         # Verify successful, CREATE ORDER
-#         new_order = Order(
-#             customer_id=cust.id,
-#             total_amount=payload.total_amount,
-#             status="PAID",
-#             created_at=datetime.utcnow()
-#         )
-#         db.add(new_order)
-#         db.commit()
-#         
-#         return {"ok": True, "order_id": new_order.id, "status": "paid"}
-#     except razorpay.errors.SignatureVerificationError:
-#         raise HTTPException(status_code=400, detail="Payment verification failed")
-#     except Exception as e:
-#         print(f"Payment Verification Error: {e}")
-#         raise HTTPException(status_code=500, detail="Internal Server Error")
+@app.post("/payment/verify")
+def verify_payment(payload: PaymentVerifyIn, db: Session = Depends(get_db), cust: Customer = Depends(get_current_customer)):
+    try:
+        # Verify Signature
+        client.utility.verify_payment_signature({
+            'razorpay_order_id': payload.razorpay_order_id,
+            'razorpay_payment_id': payload.razorpay_payment_id,
+            'razorpay_signature': payload.razorpay_signature
+        })
+        
+        # Verify successful, CREATE ORDER
+        new_order = Order(
+            customer_id=cust.id,
+            total_amount=payload.total_amount,
+            status="PAID",
+            created_at=datetime.utcnow()
+        )
+        db.add(new_order)
+        db.commit()
+        
+        return {"ok": True, "order_id": new_order.id, "status": "paid"}
+    except razorpay.errors.SignatureVerificationError:
+        raise HTTPException(status_code=400, detail="Payment verification failed")
+    except Exception as e:
+        print(f"Payment Verification Error: {e}")
+        raise HTTPException(status_code=500, detail="Internal Server Error")

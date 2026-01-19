@@ -98,3 +98,29 @@ def get_current_admin(request: Request) -> AdminUser:
     if not token:
         raise HTTPException(status_code=401, detail="Not authenticated")
     return read_session_token(token)
+
+CUSTOMER_COOKIE_NAME = "royaliq_customer_session"
+
+def get_current_customer(request: Request, db: Session) -> "Customer":
+    """
+    Dependency to get current logged in customer from cookie.
+    """
+    from app.models import Customer
+    token = request.cookies.get(CUSTOMER_COOKIE_NAME, "").strip()
+    if not token:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    
+    try:
+        payload = jwt.decode(token, settings.JWT_SECRET, algorithms=["HS256"])
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid session token")
+    
+    phone = payload.get("sub")
+    if not phone:
+        raise HTTPException(status_code=401, detail="Invalid token")
+    
+    cust = db.query(Customer).filter(Customer.phone == phone).first()
+    if not cust:
+         raise HTTPException(status_code=401, detail="Customer not found")
+    
+    return cust

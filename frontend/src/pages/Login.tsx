@@ -22,7 +22,7 @@ export default function Login() {
             } else {
                 await authEmailLogin({ email, password });
             }
-            window.location.href = "/";
+            window.location.href = "/admin";
         } catch (e: any) {
             console.error(e);
             setErr(e?.message || "Authentication failed. Check credentials or server.");
@@ -194,7 +194,7 @@ export default function Login() {
                                     return;
                                 }
                                 await authGoogle(token);
-                                window.location.href = "/";
+                                window.location.href = "/admin";
                             } catch (e: any) {
                                 console.error(e);
                                 setErr(e?.message || "Login failed. Check server logs.");
