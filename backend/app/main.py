@@ -319,8 +319,8 @@ def signup(payload: SignupIn, db: Session = Depends(get_db)):
         key=COOKIE_NAME,
         value=token,
         httponly=True,
-        samesite="lax",
-        secure=bool(int(settings.COOKIE_SECURE)),
+        samesite="none",
+        secure=True,
         max_age=24 * 3600,
     )
     return resp
@@ -344,8 +344,8 @@ def auth_login(payload: LoginIn, db: Session = Depends(get_db)):
         key=COOKIE_NAME,
         value=token,
         httponly=True,
-        samesite="lax",
-        secure=bool(int(settings.COOKIE_SECURE)),
+        samesite="none",
+        secure=True,
         max_age=24 * 3600,
     )
     return resp
