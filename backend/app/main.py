@@ -265,8 +265,8 @@ def auth_google(payload: GoogleCredentialIn):
             key=COOKIE_NAME,
             value=token,
             httponly=True,
-            samesite="lax",
-            secure=bool(int(settings.COOKIE_SECURE)),
+            samesite="none",
+            secure=True,
             max_age=24 * 3600,
         )
         return resp
