@@ -30,8 +30,10 @@ def _generate_object_key(sku: str, content_type: str) -> str:
     return f"products/{sku}/{unique_id}.{ext}"
 
 
+from botocore.client import Config
+
 def _get_s3_client():
-    """Create and return S3 client with credentials."""
+    """Create and return S3 client with credentials and SigV4 config."""
     if not all([settings.AWS_ACCESS_KEY_ID, settings.AWS_SECRET_ACCESS_KEY, 
                 settings.AWS_S3_BUCKET_NAME]):
         raise ValueError("AWS S3 credentials not configured. Please set AWS_* environment variables.")
@@ -39,12 +41,18 @@ def _get_s3_client():
     if "your_" in settings.AWS_ACCESS_KEY_ID.lower() or "your_" in settings.AWS_S3_BUCKET_NAME.lower():
          raise ValueError("AWS S3 credentials appear to be placeholders. Please update .env with actual credentials.")
     
+    # We force s3v4 to support newer regions like eu-north-1
     return boto3.client(
         's3',
         aws_access_key_id=settings.AWS_ACCESS_KEY_ID,
         aws_secret_access_key=settings.AWS_SECRET_ACCESS_KEY,
-        region_name=settings.AWS_REGION
+        region_name=settings.AWS_REGION,
+        config=Config(
+            signature_version='s3v4',
+            s3={'addressing_style': 'virtual'}
+        )
     )
+
 
 
 def generate_presigned_upload_url(sku: str, content_type: str, expires_in: int = 3600) -> dict:
