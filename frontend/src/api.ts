@@ -95,21 +95,39 @@ export type PublicProduct = {
     category?: string;
     weight_g?: number;
     price?: number;
+    primary_image?: string;
     images: { url: string; is_primary: boolean }[];
     related_products?: string[];
 };
+
+export function fixImageUrl(url: string | undefined): string {
+    if (!url) return "";
+    if (url.startsWith("http")) return url;
+    return `${API_BASE}${url.startsWith("/") ? "" : "/"}${url}`;
+}
 
 export async function publicListProducts(q?: string, category?: string) {
     const params = new URLSearchParams();
     if (q) params.append("q", q);
     if (category) params.append("category", category);
     params.append("limit", "1000");
-    return apiGet<PublicProduct[]>(`/public/products?${params.toString()}`);
+    const products = await apiGet<PublicProduct[]>(`/public/products?${params.toString()}`);
+    return products.map(p => ({
+        ...p,
+        primary_image: fixImageUrl(p.primary_image),
+        images: p.images.map(img => ({ ...img, url: fixImageUrl(img.url) }))
+    }));
 }
 
 export async function publicGetProduct(sku: string) {
-    return apiGet<PublicProduct>(`/public/products/${sku}`);
+    const p = await apiGet<PublicProduct>(`/public/products/${sku}`);
+    return {
+        ...p,
+        primary_image: fixImageUrl(p.primary_image),
+        images: p.images.map(img => ({ ...img, url: fixImageUrl(img.url) }))
+    };
 }
+
 
 export async function publicCreateOrder(data: {
     customer_name: string;

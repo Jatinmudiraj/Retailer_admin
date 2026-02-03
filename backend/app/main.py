@@ -200,7 +200,6 @@ def _retail_valuation_inr(weight_g: Optional[float], gold_rate: float) -> Option
 
 def _get_image_url_safe(img: ProductImage) -> Optional[str]:
     # Priority: s3_key (new) > url (legacy) > image_data (DB) > local path
-    base_url = settings.BACKEND_URL.rstrip("/")
     if img.s3_key:
         try:
             return generate_presigned_get_url(img.s3_key)
@@ -210,10 +209,11 @@ def _get_image_url_safe(img: ProductImage) -> Optional[str]:
     if img.url:
         return img.url
     if img.image_data:
-        return f"{base_url}/images/{img.id}"
+        return f"/images/{img.id}"
     if img.path:
-        return f"{base_url}/media/{img.path.lstrip('/')}"
+        return f"/media/{img.path.lstrip('/')}"
     return None
+
 
 
 
