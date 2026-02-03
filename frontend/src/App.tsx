@@ -24,6 +24,8 @@ import Checkout from "./pages/Checkout";
 import { CustomerProvider } from "./context/CustomerContext";
 import { CartProvider } from "./context/CartContext";
 
+import Loader from "./components/Loader";
+
 function Protected(props: { user: AdminUser | null; children: React.ReactNode }) {
     if (!props.user) return <Navigate to="/login" replace />;
     return <>{props.children}</>;
@@ -42,7 +44,7 @@ export default function App() {
             .catch(() => setLoaded(true));
     }, []);
 
-    if (!loaded) return <div className="container" style={{ paddingTop: 40 }}>Loading...</div>;
+    if (!loaded) return <Loader fullscreen text="Initializing RoyalIQ..." />;
 
     return (
         <BrowserRouter>

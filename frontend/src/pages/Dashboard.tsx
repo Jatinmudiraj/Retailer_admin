@@ -12,6 +12,8 @@ import {
     Download
 } from "lucide-react";
 
+import Loader from "../components/Loader";
+
 export default function Dashboard() {
     const [metrics, setMetrics] = useState<Metrics | null>(null);
     const [gold, setGold] = useState<number>(0);
@@ -40,7 +42,11 @@ export default function Dashboard() {
     }
 
     if (!metrics) {
-        return <div className="card">Loading Control Center...</div>;
+        return (
+            <div className="card" style={{ minHeight: 400 }}>
+                <Loader text="Loading Control Center..." />
+            </div>
+        );
     }
 
     return (

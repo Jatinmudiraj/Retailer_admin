@@ -23,6 +23,7 @@ export type Product = {
     created_at?: string;
     updated_at?: string;
     subcategory?: string | null;
+    reservations?: { id: string, name: string, qty: number, created_at: string }[] | null;
 };
 
 function zoneClass(z?: string | null) {
@@ -31,6 +32,7 @@ function zoneClass(z?: string | null) {
     if (v === "watch") return "badge watch";
     if (v === "dead") return "badge dead";
     if (v === "reserved") return "badge reserved";
+    if (v === "sold") return "badge sold";
     return "badge";
 }
 

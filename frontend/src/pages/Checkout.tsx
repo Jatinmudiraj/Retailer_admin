@@ -104,8 +104,15 @@ export default function Checkout() {
     if (items.length === 0) {
         return (
             <ShopLayout>
-                <div style={{ padding: 40, textAlign: "center", color: '#fff' }}>
-                    <h2>Your cart is empty</h2>
+                <div style={{ padding: 100, textAlign: "center", color: '#1a1a1a' }}>
+                    <h2 style={{ fontSize: 32, fontWeight: 700, marginBottom: 16 }}>Your cart is empty</h2>
+                    <p style={{ color: "#666", marginBottom: 32 }}>Add some beautiful jewelry to your bag to proceed.</p>
+                    <button
+                        onClick={() => navigate("/")}
+                        style={{ background: "#D4AF37", color: "#000", border: "none", padding: "12px 32px", borderRadius: 50, fontWeight: 700, cursor: "pointer" }}
+                    >
+                        Browse Collection
+                    </button>
                 </div>
             </ShopLayout>
         );
@@ -113,38 +120,71 @@ export default function Checkout() {
 
     return (
         <ShopLayout>
-            <div style={{ padding: "40px 20px", maxWidth: 800, margin: "0 auto", color: '#fff' }}>
-                <h1 style={{ fontSize: 24, marginBottom: 20 }}>Checkout</h1>
+            <div style={{ padding: "60px 20px", maxWidth: 1000, margin: "0 auto", color: '#1a1a1a', fontFamily: "'Outfit', sans-serif" }}>
+                <h1 style={{ fontSize: 36, fontWeight: 800, marginBottom: 40, textAlign: "center", letterSpacing: -1 }}>Order Checkout</h1>
 
-                <div style={{ background: "#111", padding: 20, borderRadius: 8, marginBottom: 20 }}>
-                    {items.map(item => (
-                        <div key={item.product.sku} style={{ display: "flex", justifyContent: "space-between", marginBottom: 10, borderBottom: '1px solid #333', paddingBottom: 10 }}>
-                            <div>
-                                <div style={{ fontWeight: 600 }}>{item.product.name}</div>
-                                <div style={{ fontSize: 13, color: '#888' }}>Qty: {item.qty}</div>
+                <div style={{ display: "grid", gridTemplateColumns: "1.5fr 1fr", gap: 40, alignItems: "start" }}>
+                    {/* Summary */}
+                    <div style={{ background: "#fff", padding: 32, borderRadius: 24, boxShadow: "0 10px 40px rgba(0,0,0,0.03)", border: "1px solid rgba(0,0,0,0.04)" }}>
+                        <h3 style={{ fontSize: 20, fontWeight: 700, marginBottom: 24, borderBottom: "1px solid #f0f0f0", paddingBottom: 16 }}>Review Bag</h3>
+                        {items.map(item => (
+                            <div key={item.product.sku} style={{ display: "flex", gap: 20, marginBottom: 20, paddingBottom: 20, borderBottom: '1px solid #f9f9f9' }}>
+                                <div style={{ width: 80, height: 80, background: "#f8f8f8", borderRadius: 12, overflow: "hidden", flexShrink: 0 }}>
+                                    <img src={item.product.images?.[0]?.url} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                                </div>
+                                <div style={{ flex: 1 }}>
+                                    <div style={{ fontWeight: 700, fontSize: 16 }}>{item.product.name}</div>
+                                    <div style={{ fontSize: 13, color: '#888', marginTop: 4 }}>SKU: {item.product.sku}</div>
+                                    <div style={{ fontSize: 14, color: '#444', marginTop: 8, fontWeight: 500 }}>Qty: {item.qty}</div>
+                                </div>
+                                <div style={{ fontWeight: 700, fontSize: 16 }}>₹{((item.product.price || 0) * item.qty).toLocaleString()}</div>
                             </div>
-                            <div>₹{((item.product.price || 0) * item.qty).toLocaleString()}</div>
-                        </div>
-                    ))}
-                    <div style={{ display: "flex", justifyContent: "space-between", marginTop: 20, fontSize: 18, fontWeight: 'bold' }}>
-                        <span>Total</span>
-                        <span>₹{total.toLocaleString()}</span>
+                        ))}
                     </div>
-                </div>
 
-                <div style={{ textAlign: "right" }}>
-                    <button
-                        onClick={handlePayment}
-                        disabled={loading}
-                        style={{
-                            background: "#D4AF37", color: "#000",
-                            padding: "12px 30px", fontSize: 16, fontWeight: 700,
-                            border: "none", borderRadius: 8, cursor: "pointer",
-                            opacity: loading ? 0.7 : 1
-                        }}
-                    >
-                        {loading ? "Processing..." : "Pay Now"}
-                    </button>
+                    {/* Order Total & Pay */}
+                    <div style={{ position: "sticky", top: 120 }}>
+                        <div style={{ background: "#fff", padding: 32, borderRadius: 24, boxShadow: "0 10px 40px rgba(0,0,0,0.03)", border: "1px solid rgba(0,0,0,0.04)" }}>
+                            <h3 style={{ fontSize: 20, fontWeight: 700, marginBottom: 24 }}>Order Total</h3>
+
+                            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 12, color: "#666" }}>
+                                <span>Subtotal</span>
+                                <span>₹{total.toLocaleString()}</span>
+                            </div>
+                            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 24, color: "#666" }}>
+                                <span>Shipping</span>
+                                <span style={{ color: "#27ae60", fontWeight: 600 }}>FREE</span>
+                            </div>
+
+                            <div style={{ display: "flex", justifyContent: "space-between", borderTop: "1px solid #eee", paddingTop: 24, marginTop: 24, fontSize: 22, fontWeight: 800 }}>
+                                <span>Total</span>
+                                <span>₹{total.toLocaleString()}</span>
+                            </div>
+
+                            <button
+                                onClick={handlePayment}
+                                disabled={loading}
+                                style={{
+                                    width: "100%",
+                                    background: "#D4AF37", color: "#000",
+                                    padding: "18px", fontSize: 18, fontWeight: 800,
+                                    border: "none", borderRadius: 50, cursor: "pointer",
+                                    opacity: loading ? 0.7 : 1,
+                                    marginTop: 32,
+                                    transition: "all 0.2s"
+                                }}
+                                onMouseOver={e => e.currentTarget.style.transform = "translateY(-2px)"}
+                                onMouseOut={e => e.currentTarget.style.transform = "translateY(0)"}
+                            >
+                                {loading ? "Processing..." : "Secure Payment"}
+                            </button>
+
+                            <div style={{ textAlign: "center", marginTop: 20, fontSize: 12, color: "#999", display: "flex", alignItems: "center", justifyContent: "center", gap: 8 }}>
+                                <svg width="12" height="12" fill="currentColor" viewBox="0 0 16 16"><path d="M8 1a2 2 0 0 1 2 2v4H6V3a2 2 0 0 1 2-2zm3 6V3a3 3 0 0 0-6 0v4a2 2 0 0 0-2 2v5a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z" /></svg>
+                                SECURE CHECKOUT
+                            </div>
+                        </div>
+                    </div>
                 </div>
             </div>
         </ShopLayout>

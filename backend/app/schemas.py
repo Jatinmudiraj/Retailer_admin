@@ -68,6 +68,7 @@ class ProductIn(BaseModel):
     category: Optional[str] = None
     subcategory: Optional[str] = None
     image_base64: Optional[str] = None  # New field for Base64 image upload
+    additional_images: Optional[List[str]] = []
     weight_g: Optional[float] = None
     stock_type: str = "physical"
     qty: int = 1
@@ -75,7 +76,9 @@ class ProductIn(BaseModel):
     price: Optional[float] = None
     manual_rating: Optional[float] = None
     terms: Optional[str] = None
+    terms: Optional[str] = None
     options: Optional[dict] = None
+    tags: Optional[List[str]] = []
 
 
 class ProductImageOut(BaseModel):
@@ -95,7 +98,9 @@ class ProductOut(BaseModel):
     price: Optional[float] = None
     manual_rating: Optional[float] = None
     terms: Optional[str] = None
+    terms: Optional[str] = None
     options: Optional[dict] = None
+    tags: Optional[List[str]] = []
     qty: int
     purchase_date: Optional[date]
     reserved_name: Optional[str]
@@ -109,12 +114,23 @@ class ProductOut(BaseModel):
     rating_count: int = 0
     retail_valuation_inr: Optional[float] = None
     status_zone: Optional[str] = None  # Fresh/Watch/Dead/Reserved
+    status_zone: Optional[str] = None  # Fresh/Watch/Dead/Reserved
+    reservations: List[ReservationOut] = []  # Added reservations list
     related_products: List[str] = []  # List of SKUs
+
+
+class ReservationOut(BaseModel):
+    id: str
+    name: str
+    phone: Optional[str]
+    qty: int
+    created_at: datetime
 
 
 class ReserveIn(BaseModel):
     name: str
     phone: str
+    qty: int = 1
 
 
 class MarkSoldIn(BaseModel):

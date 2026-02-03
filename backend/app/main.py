@@ -61,7 +61,10 @@ from app.schemas import (
     CustomerIn, CustomerOut, OrderIn, OrderOut,
     LoginIn, SignupIn,
     PublicOrderIn,
+    ReservationOut,
 )
+
+from app.models import Base, Feedback, Product, ProductImage, Rating, SaleArchive, Setting, WishlistRequest, S3DeletionQueue, Customer, Order, OrderItem, AdminAccount, Reservation
 
 from app.recommender import ContentBasedRecommender
 recommender = ContentBasedRecommender()
@@ -168,9 +171,18 @@ def _bayesian_mean(avg: float, v: int, global_avg: float, m: int = 5) -> float:
     return (v / (v + m)) * avg + (m / (v + m)) * global_avg
 
 
-def _status_zone(p: Product, days_in_stock: int) -> str:
-    if p.reserved_name and p.reserved_phone:
+def _status_zone(db: Session, p: Product, days_in_stock: int) -> str:
+    # Check if Sold (qty 0 and exists in archive)
+    if p.qty == 0:
+        is_sold = db.query(SaleArchive).filter(SaleArchive.sku == p.sku).count() > 0
+        if is_sold:
+            return "Sold"
+
+    # Check Reserved (legacy or active)
+    has_reservations = (p.reservations and len(p.reservations) > 0)
+    if (p.reserved_name and p.reserved_phone) or has_reservations:
         return "Reserved"
+        
     if days_in_stock <= 90:
         return "Fresh"
     if days_in_stock <= 180:
@@ -185,7 +197,26 @@ def _retail_valuation_inr(weight_g: Optional[float], gold_rate: float) -> Option
     return float(weight_g) * float(gold_rate)
 
 
+
+def _get_image_url_safe(img: ProductImage) -> Optional[str]:
+    # Priority: s3_key (new) > url (legacy) > image_data (DB) > local path
+    if img.s3_key:
+        try:
+            return generate_presigned_get_url(img.s3_key)
+        except Exception:
+            # Fallback if S3 credentials missing or other error
+            pass
+    if img.url:
+        return img.url
+    if img.image_data:
+        return f"/images/{img.id}"
+    if img.path:
+        return f"/media/{img.path.lstrip('/')}"
+    return None
+
+
 def _primary_image_url(db: Session, sku: str) -> Optional[str]:
+
     img = (
         db.query(ProductImage)
         .filter(ProductImage.sku == sku)
@@ -195,13 +226,7 @@ def _primary_image_url(db: Session, sku: str) -> Optional[str]:
     if not img:
         return None
     # Priority: s3_key (new) > url (legacy) > image_data (DB) > local path
-    if img.s3_key:
-        return generate_presigned_get_url(img.s3_key)
-    if img.url:
-        return img.url
-    if img.image_data:
-        return f"/images/{img.id}"
-    return f"/media/{img.path.lstrip('/')}"
+    return _get_image_url_safe(img)
 
 
 def _product_out(db: Session, p: Product) -> ProductOut:
@@ -220,7 +245,7 @@ def _product_out(db: Session, p: Product) -> ProductOut:
     global_avg = float(global_avg_q[0] or 0.0) if global_avg_q else 0.0
 
     bayes = _bayesian_mean(r_avg, r_count, global_avg, m=5) if global_avg > 0 else (r_avg if r_count > 0 else None)
-    zone = _status_zone(p, days_in_stock)
+    zone = _status_zone(db, p, days_in_stock)
     val = _retail_valuation_inr(p.weight_g, gold_rate)
 
     return ProductOut(
@@ -238,15 +263,29 @@ def _product_out(db: Session, p: Product) -> ProductOut:
         created_at=p.created_at,
         updated_at=p.updated_at,
         is_archived=p.is_archived,
+        price=p.price,
+        manual_rating=p.manual_rating,
+        terms=p.terms,
+        options=p.options,
         primary_image=_primary_image_url(db, p.sku),
         bayesian_rating=(round(float(bayes), 3) if bayes is not None else None),
         rating_count=r_count,
         retail_valuation_inr=(round(float(val), 2) if val is not None else None),
         status_zone=zone,
+        tags=p.tags or [],
+        reservations=[
+            ReservationOut(
+                id=r.id,
+                name=r.name,
+                phone=r.phone,
+                qty=r.qty,
+                created_at=r.created_at
+            ) for r in (p.reservations or [])
+        ],
         images=[
             {
                 "s3_key": i.s3_key or "",
-                "url": (generate_presigned_get_url(i.s3_key) if i.s3_key else (i.url or (f"/media/{i.path.lstrip('/')}" if i.path else (f"/images/{i.id}" if i.image_data else None)))),
+                "url": _get_image_url_safe(i),
                 "is_primary": i.is_primary
             }
             for i in p.images
@@ -753,7 +792,7 @@ def dashboard_metrics(request: Request, db: Session = Depends(get_db)):
     for p in products:
         base_date = p.purchase_date or p.created_at.date()
         days_in_stock = (date.today() - base_date).days
-        z = _status_zone(p, days_in_stock)
+        z = _status_zone(db, p, days_in_stock)
         if z == "Reserved":
             zone_reserved += 1
         elif z == "Fresh":
@@ -814,60 +853,7 @@ def export_ratings_csv(request: Request, db: Session = Depends(get_db)):
     return StreamingResponse(generate(), media_type="text/csv", headers={"Content-Disposition": "attachment; filename=ratings.csv"})
 
 
-# -----------------------
-# Helper to populate ProductOut including images
-# -----------------------
 
-# Helper to populate ProductOut including images
-def _product_out(db: Session, p: Product) -> ProductOut:
-    # Explicitly load images relation if needed, or rely on lazy loading
-    # Convert ORM images to Schema images
-    imgs = []
-    for i in p.images:
-       imgs.append({
-           "s3_key": i.s3_key,
-           "url": get_public_url(i.s3_key),
-           "is_primary": i.is_primary
-       })
-    
-    # Calculate simple primary image URL
-    p_img = None
-    if imgs:
-        # Find primary in list
-        prim = next((x for x in imgs if x["is_primary"]), None)
-        if prim: 
-            p_img = prim["url"]
-        else:
-            p_img = imgs[0]["url"]
-
-    # Map Pydantic fields manually or use from_orm if Config is set (we do manual for control)
-    return ProductOut(
-        sku=p.sku,
-        name=p.name,
-        description=p.description,
-        category=p.category,
-        subcategory=p.subcategory,
-        weight_g=p.weight_g,
-        stock_type=p.stock_type,
-        price=p.price,
-        manual_rating=p.manual_rating,
-        terms=p.terms,
-        options=p.options,
-        qty=p.qty,
-        purchase_date=p.purchase_date,
-        reserved_name=p.reserved_name,
-        reserved_phone=p.reserved_phone,
-        created_at=p.created_at,
-        updated_at=p.updated_at,
-        is_archived=p.is_archived,
-        primary_image=p_img,
-        bayesian_rating=p.manual_rating, # Use manual_rating or default to None
-        rating_count=0, # Default to 0 as we are not calculating it yet
-        retail_valuation_inr=None, # Missing field
-        status_zone=None, # Missing field
-        images=imgs, # Now populated
-        related_products=[] # Will be filled by caller if needed
-    )
 
 
 # -----------------------
@@ -1055,6 +1041,7 @@ def create_product(payload: ProductIn, request: Request, db: Session = Depends(g
         manual_rating=payload.manual_rating,
         terms=payload.terms,
         options=payload.options,
+        tags=payload.tags or [],
     )
     p.options = payload.options
 
@@ -1095,6 +1082,38 @@ def create_product(payload: ProductIn, request: Request, db: Session = Depends(g
                 f.write(f"Error: {e}\n")
                 f.write(traceback.format_exc())
             raise HTTPException(status_code=500, detail=f"Image upload failed: {str(e)}")
+
+    # Handle Additional Images
+    if payload.additional_images:
+        for idx, b64 in enumerate(payload.additional_images):
+            try:
+                if not b64 or "," not in b64: continue
+                
+                header, encoded = b64.split(",", 1)
+                data = base64.b64decode(encoded)
+                content_type = header.split(";", 1)[0].split(":", 1)[1]
+                
+                s3_key = upload_file_to_s3(data, content_type, f"{p.sku}_extra_{idx}_{int(datetime.utcnow().timestamp())}")
+                public_url = get_public_url(s3_key)
+
+                img = ProductImage(
+                    sku=p.sku,
+                    s3_key=s3_key,
+                    upload_status="ACTIVE",
+                    content_type=content_type,
+                    file_size=len(data),
+                    checksum=calculate_checksum(data),
+                    is_primary=False, # Additional images are not primary
+                    created_at=datetime.utcnow(),
+                    updated_at=datetime.utcnow(),
+                    url=public_url
+                )
+                db.add(img)
+            except Exception as e:
+                print(f"Error uploading additional image: {e}")
+                # We continue even if one fails
+        
+        db.commit()
     
     return _product_out(db, p)
 
@@ -1129,6 +1148,7 @@ def update_product(sku: str, payload: ProductIn, request: Request, bg_tasks: Bac
     p.manual_rating = payload.manual_rating
     p.terms = payload.terms
     p.options = payload.options
+    p.tags = payload.tags or []
 
     # Handle Image Update - Upload to S3
     if payload.image_base64:
@@ -1172,6 +1192,36 @@ def update_product(sku: str, payload: ProductIn, request: Request, bg_tasks: Bac
             raise HTTPException(status_code=500, detail=f"Image upload failed: {str(e)}")
 
     db.commit()
+
+    # Handle Additional Images (Update)
+    if payload.additional_images:
+        for idx, b64 in enumerate(payload.additional_images):
+            try:
+                if not b64 or "," not in b64: continue
+                header, encoded = b64.split(",", 1)
+                data = base64.b64decode(encoded)
+                content_type = header.split(";", 1)[0].split(":", 1)[1]
+                
+                s3_key = upload_file_to_s3(data, content_type, f"{p.sku}_extra_upd_{idx}_{int(datetime.utcnow().timestamp())}")
+                public_url = get_public_url(s3_key)
+
+                img = ProductImage(
+                    sku=p.sku,
+                    s3_key=s3_key,
+                    upload_status="ACTIVE",
+                    content_type=content_type,
+                    file_size=len(data),
+                    checksum=calculate_checksum(data),
+                    is_primary=False,
+                    created_at=datetime.utcnow(),
+                    updated_at=datetime.utcnow(),
+                    url=public_url
+                )
+                db.add(img)
+            except Exception as e:
+                print(f"Error adding additional image: {e}")
+                
+        db.commit()
     return _product_out(db, p)
 
 
@@ -1200,24 +1250,89 @@ def reserve_product(sku: str, payload: ReserveIn, request: Request, db: Session 
     p = db.query(Product).filter(Product.sku == sku).first()
     if not p:
         raise HTTPException(status_code=404, detail="Not found")
+    
+    req_qty = payload.qty if payload.qty > 0 else 1
+    
+    if p.qty < req_qty:
+        raise HTTPException(status_code=400, detail=f"Insufficient stock. Available: {p.qty}")
+    
+    # Deduct quantity
+    p.qty -= req_qty
+    
+    # Create reservation record
+    res = Reservation(
+        sku=sku,
+        name=payload.name.strip(),
+        phone=payload.phone.strip(),
+        qty=req_qty,
+        created_at=datetime.utcnow()
+    )
+    db.add(res)
+    
+    # Update legacy fields for simple status check (optional, but good for "is reserved" logic)
     p.reserved_name = payload.name.strip()
     p.reserved_phone = payload.phone.strip()
     p.updated_at = datetime.utcnow()
+    
     db.commit()
     return _product_out(db, p)
 
 
 @app.post("/products/{sku}/release")
-def release_reservation(sku: str, request: Request, db: Session = Depends(get_db)):
+def release_all_reservations(sku: str, request: Request, db: Session = Depends(get_db)):
     _ = get_current_admin(request)
     p = db.query(Product).filter(Product.sku == sku).first()
     if not p:
         raise HTTPException(status_code=404, detail="Not found")
+    
+    # Release legacy
+    if p.reserved_name:
+        # If legacy reservation didn't use Reservation table logic (older data), 
+        # we might need to add back 1 qty if we assume it took 1. 
+        # But moving forward, let's rely on Reservation table.
+        # However, to be safe:
+        # If no reservations exist but reserved_name is set, it was a legacy reservation. 
+        # We should add back 1 qty (as per previous logic).
+        existing_res_count = db.query(Reservation).filter(Reservation.sku == sku).count()
+        if existing_res_count == 0 and p.reserved_name:
+             p.qty += 1
+
     p.reserved_name = None
     p.reserved_phone = None
+    
+    # Release granular reservations
+    reservations = db.query(Reservation).filter(Reservation.sku == sku).all()
+    for res in reservations:
+        p.qty += res.qty
+        db.delete(res)
+        
     p.updated_at = datetime.utcnow()
     db.commit()
     return _product_out(db, p)
+
+
+@app.post("/reservations/{reservation_id}/release")
+def release_single_reservation(reservation_id: str, request: Request, db: Session = Depends(get_db)):
+    _ = get_current_admin(request)
+    res = db.query(Reservation).filter(Reservation.id == reservation_id).first()
+    if not res:
+        raise HTTPException(status_code=404, detail="Reservation not found")
+        
+    p = db.query(Product).filter(Product.sku == res.sku).first()
+    if p:
+        p.qty += res.qty
+        # Clear legacy if it matches (simple heuristic)
+        if p.reserved_name == res.name:
+            p.reserved_name = None
+            p.reserved_phone = None
+        p.updated_at = datetime.utcnow()
+        
+    db.delete(res)
+    db.commit()
+    
+    if p:
+        return _product_out(db, p)
+    return {"ok": True}
 
 
 @app.post("/products/{sku}/mark_sold")
@@ -1230,8 +1345,9 @@ def mark_sold(sku: str, payload: MarkSoldIn, request: Request, db: Session = Dep
     base_date = p.purchase_date or p.created_at.date()
     days_to_sell = (date.today() - base_date).days
 
-    # archive
-    p.is_archived = True
+    # Do NOT archive, so it stays in Vault.
+    # Set qty to 0 to indicate it's out of stock (sold out).
+    p.qty = 0
     p.updated_at = datetime.utcnow()
 
     # sales record

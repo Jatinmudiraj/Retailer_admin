@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import InventoryTable, { Product } from "../components/InventoryTable";
 import InventoryGrid from "../components/InventoryGrid";
 import ProductDrawer from "../components/ProductDrawer";
+import Loader from "../components/Loader";
 import { apiGet, apiDelete } from "../api";
 import { Database, Search, Filter, RefreshCw, LayoutGrid, List } from "lucide-react";
 import toast from "react-hot-toast";
@@ -44,6 +45,8 @@ export default function Vault() {
     useEffect(() => {
         load().catch(() => { });
     }, []);
+
+    if (loading && items.length === 0) return <Loader fullscreen text="Loading Vault..." />;
 
     return (
         <div>

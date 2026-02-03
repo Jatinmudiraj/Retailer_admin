@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { Link } from "react-router-dom";
 import { GoogleLogin } from "@react-oauth/google";
 import { authGoogle, authEmailLogin, authEmailSignup } from "../auth";
 import { ShieldCheck, Lock, Mail, Key, User, ArrowRight } from "lucide-react";
@@ -38,80 +39,81 @@ export default function Login() {
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            background: "linear-gradient(135deg, #0f0f0f 0%, #1a1a1a 100%)",
+            background: "#080808",
             color: "#fff",
-            fontFamily: "'Inter', sans-serif"
+            fontFamily: "'Outfit', sans-serif"
         }}>
-            {/* Background Accents */}
-            <div style={{ position: "absolute", top: "20%", left: "20%", width: 300, height: 300, background: "var(--accent)", filter: "blur(120px)", opacity: 0.1, borderRadius: "50%" }}></div>
-            <div style={{ position: "absolute", bottom: "20%", right: "20%", width: 250, height: 250, background: "#fff", filter: "blur(100px)", opacity: 0.05, borderRadius: "50%" }}></div>
+            {/* High-End Background Effects */}
+            <div style={{ position: "absolute", top: "20%", left: "15%", width: 600, height: 600, background: "#D4AF37", filter: "blur(250px)", opacity: 0.05, borderRadius: "50%" }}></div>
+            <div style={{ position: "absolute", bottom: "10%", right: "10%", width: 400, height: 400, background: "#fff", filter: "blur(200px)", opacity: 0.03, borderRadius: "50%" }}></div>
 
-            <div className="card" style={{
-                width: 440,
-                padding: "40px 48px",
-                background: "rgba(255, 255, 255, 0.03)",
-                backdropFilter: "blur(16px)",
-                border: "1px solid rgba(255, 255, 255, 0.1)",
-                borderRadius: 24,
+            <div style={{
+                width: 460,
+                padding: "56px 48px",
+                background: "rgba(20, 20, 20, 0.4)",
+                backdropFilter: "blur(40px)",
+                border: "1px solid rgba(255, 255, 255, 0.05)",
+                borderRadius: 40,
                 display: "flex",
                 flexDirection: "column",
-                boxShadow: "0 20px 50px rgba(0,0,0,0.5)"
+                boxShadow: "0 40px 100px rgba(0,0,0,0.8)",
+                position: "relative",
+                zIndex: 1
             }}>
-                <div style={{ display: "flex", flexDirection: "column", alignItems: "center", marginBottom: 32 }}>
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "center", marginBottom: 40 }}>
                     <div style={{
-                        width: 56, height: 56, borderRadius: 16,
-                        background: "linear-gradient(135deg, var(--accent) 0%, #a07a1a 100%)",
+                        width: 72, height: 72, borderRadius: 24,
+                        background: "linear-gradient(135deg, #D4AF37 0%, #aa8b2c 100%)",
                         display: "flex", alignItems: "center", justifyContent: "center",
-                        marginBottom: 20, boxShadow: "0 10px 20px rgba(212, 175, 55, 0.3)"
+                        marginBottom: 24, boxShadow: "0 20px 40px rgba(212, 175, 55, 0.15)"
                     }}>
-                        <ShieldCheck size={28} color="#fff" />
+                        <ShieldCheck size={36} color="#000" />
                     </div>
-                    <div style={{ fontSize: 24, fontWeight: 700, marginBottom: 8 }}>RoyalIQ Admin</div>
-                    <div style={{ fontSize: 13, color: "var(--text-muted)", textAlign: "center", lineHeight: 1.5 }}>
-                        {isSignup ? "Create your administrator account." : "Please sign in to manage your vault."}
-                    </div>
+                    <h1 style={{ fontSize: 32, fontWeight: 800, margin: "0 0 10px 0", letterSpacing: -1 }}>Administrator</h1>
+                    <p style={{ fontSize: 15, color: "rgba(255,255,255,0.4)", textAlign: "center", fontWeight: 500 }}>
+                        {isSignup ? "Create your administrative credentials." : "Secure entry to RoyalIQ Retailer Systems."}
+                    </p>
                 </div>
 
                 {err && (
                     <div style={{
                         background: "rgba(239, 68, 68, 0.1)",
-                        border: "1px solid rgba(239, 68, 68, 0.3)",
+                        border: "1px solid rgba(239, 68, 68, 0.2)",
                         color: "#ef4444",
-                        padding: "12px 16px",
-                        borderRadius: 12,
-                        fontSize: 13,
-                        marginBottom: 24,
-                        display: "flex", alignItems: "center", gap: 10
+                        padding: "14px 20px",
+                        borderRadius: 16,
+                        fontSize: 14,
+                        marginBottom: 32,
+                        display: "flex", alignItems: "center", gap: 12, fontWeight: 500
                     }}>
-                        <Lock size={14} /> {err}
+                        <Lock size={16} /> {err}
                     </div>
                 )}
 
-                <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+                <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 20 }}>
                     {isSignup && (
                         <div style={{ position: "relative" }}>
-                            <User size={16} style={{ position: "absolute", left: 16, top: "50%", transform: "translateY(-50%)", color: "rgba(255,255,255,0.3)" }} />
+                            <User size={18} style={{ position: "absolute", left: 18, top: "50%", transform: "translateY(-50%)", color: "rgba(255,255,255,0.2)" }} />
                             <input
                                 type="text"
-                                placeholder="Full Name"
+                                placeholder="Universal Name"
                                 value={name}
                                 onChange={(e) => setName(e.target.value)}
                                 required
                                 style={{
-                                    width: "100%",
-                                    padding: "14px 16px 14px 44px",
-                                    background: "rgba(255,255,255,0.05)",
-                                    border: "1px solid rgba(255,255,255,0.1)",
-                                    borderRadius: 12,
-                                    color: "#fff",
-                                    fontSize: 14,
-                                    outline: "none"
+                                    width: "100%", padding: "16px 20px 16px 52px",
+                                    background: "rgba(255,255,255,0.03)",
+                                    border: "1px solid rgba(255,255,255,0.08)",
+                                    borderRadius: 16, color: "#fff", fontSize: 15,
+                                    outline: "none", transition: "all 0.3s"
                                 }}
+                                onFocus={e => { e.target.style.borderColor = "rgba(212, 175, 55, 0.5)"; e.target.style.background = "rgba(255,255,255,0.05)"; }}
+                                onBlur={e => { e.target.style.borderColor = "rgba(255,255,255,0.08)"; e.target.style.background = "rgba(255,255,255,0.03)"; }}
                             />
                         </div>
                     )}
                     <div style={{ position: "relative" }}>
-                        <Mail size={16} style={{ position: "absolute", left: 16, top: "50%", transform: "translateY(-50%)", color: "rgba(255,255,255,0.3)" }} />
+                        <Mail size={18} style={{ position: "absolute", left: 18, top: "50%", transform: "translateY(-50%)", color: "rgba(255,255,255,0.2)" }} />
                         <input
                             type="email"
                             placeholder="Email Address"
@@ -119,35 +121,33 @@ export default function Login() {
                             onChange={(e) => setEmail(e.target.value)}
                             required
                             style={{
-                                width: "100%",
-                                padding: "14px 16px 14px 44px",
-                                background: "rgba(255,255,255,0.05)",
-                                border: "1px solid rgba(255,255,255,0.1)",
-                                borderRadius: 12,
-                                color: "#fff",
-                                fontSize: 14,
-                                outline: "none"
+                                width: "100%", padding: "16px 20px 16px 52px",
+                                background: "rgba(255,255,255,0.03)",
+                                border: "1px solid rgba(255,255,255,0.08)",
+                                borderRadius: 16, color: "#fff", fontSize: 15,
+                                outline: "none", transition: "all 0.3s"
                             }}
+                            onFocus={e => { e.target.style.borderColor = "rgba(212, 175, 55, 0.5)"; e.target.style.background = "rgba(255,255,255,0.05)"; }}
+                            onBlur={e => { e.target.style.borderColor = "rgba(255,255,255,0.08)"; e.target.style.background = "rgba(255,255,255,0.03)"; }}
                         />
                     </div>
                     <div style={{ position: "relative" }}>
-                        <Key size={16} style={{ position: "absolute", left: 16, top: "50%", transform: "translateY(-50%)", color: "rgba(255,255,255,0.3)" }} />
+                        <Key size={18} style={{ position: "absolute", left: 18, top: "50%", transform: "translateY(-50%)", color: "rgba(255,255,255,0.2)" }} />
                         <input
                             type="password"
-                            placeholder="Password"
+                            placeholder="Access Token"
                             value={password}
                             onChange={(e) => setPassword(e.target.value)}
                             required
                             style={{
-                                width: "100%",
-                                padding: "14px 16px 14px 44px",
-                                background: "rgba(255,255,255,0.05)",
-                                border: "1px solid rgba(255,255,255,0.1)",
-                                borderRadius: 12,
-                                color: "#fff",
-                                fontSize: 14,
-                                outline: "none"
+                                width: "100%", padding: "16px 20px 16px 52px",
+                                background: "rgba(255,255,255,0.03)",
+                                border: "1px solid rgba(255,255,255,0.08)",
+                                borderRadius: 16, color: "#fff", fontSize: 15,
+                                outline: "none", transition: "all 0.3s"
                             }}
+                            onFocus={e => { e.target.style.borderColor = "rgba(212, 175, 55, 0.5)"; e.target.style.background = "rgba(255,255,255,0.05)"; }}
+                            onBlur={e => { e.target.style.borderColor = "rgba(255,255,255,0.08)"; e.target.style.background = "rgba(255,255,255,0.03)"; }}
                         />
                     </div>
 
@@ -155,35 +155,29 @@ export default function Login() {
                         type="submit"
                         disabled={loading}
                         style={{
-                            width: "100%",
-                            padding: "14px",
-                            background: "var(--accent)",
-                            border: "none",
-                            borderRadius: 12,
-                            color: "#000",
-                            fontWeight: 600,
-                            fontSize: 14,
+                            width: "100%", padding: "18px",
+                            background: "#D4AF37", border: "none",
+                            borderRadius: 100, color: "#000",
+                            fontWeight: 800, fontSize: 16,
                             cursor: loading ? "not-allowed" : "pointer",
-                            display: "flex",
-                            alignItems: "center",
-                            justifyContent: "center",
-                            gap: 8,
-                            marginTop: 8,
-                            transition: "all 0.2s"
+                            display: "flex", alignItems: "center", justifyContent: "center",
+                            gap: 12, marginTop: 12, transition: "all 0.3s"
                         }}
+                        onMouseOver={e => e.currentTarget.style.transform = "translateY(-2px)"}
+                        onMouseOut={e => e.currentTarget.style.transform = "translateY(0)"}
                     >
-                        {loading ? "Processing..." : (isSignup ? "Create Account" : "Sign In")}
-                        {!loading && <ArrowRight size={16} />}
+                        {loading ? "Authorizing..." : (isSignup ? "Generate Access" : "Initiate Login")}
+                        {!loading && <ArrowRight size={20} />}
                     </button>
                 </form>
 
-                <div style={{ margin: "24px 0", display: "flex", alignItems: "center", gap: 12 }}>
-                    <div style={{ flex: 1, height: 1, background: "rgba(255,255,255,0.1)" }}></div>
-                    <div style={{ fontSize: 11, color: "rgba(255,255,255,0.3)", textTransform: "uppercase", letterSpacing: 1 }}>OR</div>
-                    <div style={{ flex: 1, height: 1, background: "rgba(255,255,255,0.1)" }}></div>
+                <div style={{ margin: "40px 0", display: "flex", alignItems: "center", gap: 20 }}>
+                    <div style={{ flex: 1, height: 1, background: "rgba(255,255,255,0.05)" }}></div>
+                    <div style={{ fontSize: 12, color: "rgba(255,255,255,0.2)", textTransform: "uppercase", letterSpacing: 2, fontWeight: 700 }}>Or</div>
+                    <div style={{ flex: 1, height: 1, background: "rgba(255,255,255,0.05)" }}></div>
                 </div>
 
-                <div style={{ width: "100%", display: "flex", justifyContent: "center" }}>
+                <div style={{ width: "100%", display: "flex", justifyContent: "center", marginBottom: 40 }}>
                     <GoogleLogin
                         onSuccess={async (cred) => {
                             try {
@@ -201,31 +195,33 @@ export default function Login() {
                             }
                         }}
                         onError={() => setErr("Google login failed")}
-                        theme="filled_black"
+                        theme="outline"
                         shape="pill"
                         text="continue_with"
-                        width="344"
+                        width="364"
                     />
                 </div>
 
-                <div style={{ marginTop: 32, textAlign: "center" }}>
+                <div style={{ textAlign: "center" }}>
                     <button
                         onClick={() => setIsSignup(!isSignup)}
                         style={{
-                            background: "none",
-                            border: "none",
-                            color: "var(--accent)",
-                            fontSize: 13,
-                            cursor: "pointer",
-                            fontWeight: 500
+                            background: "none", border: "none",
+                            color: "rgba(255,255,255,0.5)", fontSize: 14,
+                            cursor: "pointer", fontWeight: 600, transition: "color 0.2s"
                         }}
+                        onMouseOver={e => e.currentTarget.style.color = "#D4AF37"}
+                        onMouseOut={e => e.currentTarget.style.color = "rgba(255,255,255,0.5)"}
                     >
-                        {isSignup ? "Already have an account? Sign In" : "Don't have an account? Create one"}
+                        {isSignup ? "Back to Login Portal" : "Establish New Administrator"}
                     </button>
                 </div>
 
-                <div style={{ marginTop: 40, fontSize: 11, color: "rgba(255,255,255,0.2)", textAlign: "center" }}>
-                    &copy; 2024 RoyalIQ Retailer Systems
+                {/* Back to Shop Link */}
+                <div style={{ marginTop: 40, paddingTop: 32, borderTop: "1px solid rgba(255,255,255,0.05)", textAlign: "center" }}>
+                    <Link to="/" style={{ textDecoration: "none", color: "#D4AF37", fontSize: 13, fontWeight: 700, letterSpacing: 1, textTransform: "uppercase" }}>
+                        &larr; Return to Boutique
+                    </Link>
                 </div>
             </div>
         </div>

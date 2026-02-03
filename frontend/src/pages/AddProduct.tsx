@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import toast from "react-hot-toast";
-import { Package, Plus, Image as ImageIcon, CreditCard, PenTool, Layers } from "lucide-react";
+import { Package, Plus, Image as ImageIcon, CreditCard, PenTool, Layers, Tag as TagIcon } from "lucide-react";
 import imageCompression from "browser-image-compression";
 
 export default function AddProduct() {
@@ -26,39 +26,65 @@ export default function AddProduct() {
     // Options State (Dynamic Key-Value pairs)
     const [options, setOptions] = useState<{ key: string, value: string }[]>([{ key: "", value: "" }]);
 
+    // Tags State
+    const [tags, setTags] = useState<string[]>([]);
+    const [currentTag, setCurrentTag] = useState("");
+
     // Image State
     const [imageFile, setImageFile] = useState<File | null>(null);
     const [imagePreview, setImagePreview] = useState<string | null>(null);
+    const [additionalFiles, setAdditionalFiles] = useState<File[]>([]);
+    const [additionalPreviews, setAdditionalPreviews] = useState<string[]>([]);
+
     const [compressing, setCompressing] = useState(false);
 
     const handleImageChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
         if (e.target.files && e.target.files[0]) {
             const file = e.target.files[0];
             setCompressing(true);
-
-            const options = {
-                maxSizeMB: 1,
-                maxWidthOrHeight: 1920,
-                useWebWorker: true,
-            };
-
             try {
-                const compressedFile = await imageCompression(file, options);
+                const compressedFile = await imageCompression(file, { maxSizeMB: 1, maxWidthOrHeight: 1920, useWebWorker: true });
                 setImageFile(compressedFile);
                 setImagePreview(URL.createObjectURL(compressedFile));
-
-                // Optional: Notify user of compression (can remove if too noisy)
-                // const saved = ((file.size - compressedFile.size) / 1024).toFixed(0);
-                // if (file.size > compressedFile.size) toast.success(`Image compressed (saved ${saved}KB)`);
-
             } catch (error) {
-                console.error("Compression failed:", error);
-                setImageFile(file); // Fallback
+                console.error(error);
+                setImageFile(file);
                 setImagePreview(URL.createObjectURL(file));
             } finally {
                 setCompressing(false);
             }
         }
+    };
+
+    const handleAdditionalImagesChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        if (e.target.files) {
+            setCompressing(true);
+            const files = Array.from(e.target.files);
+            const newFiles: File[] = [];
+            const newPreviews: string[] = [];
+
+            for (const file of files) {
+                try {
+                    const compressed = await imageCompression(file, { maxSizeMB: 1, maxWidthOrHeight: 1920, useWebWorker: true });
+                    newFiles.push(compressed);
+                    newPreviews.push(URL.createObjectURL(compressed));
+                } catch (e) {
+                    newFiles.push(file);
+                    newPreviews.push(URL.createObjectURL(file));
+                }
+            }
+
+            setAdditionalFiles([...additionalFiles, ...newFiles]);
+            setAdditionalPreviews([...additionalPreviews, ...newPreviews]);
+            setCompressing(false);
+        }
+    };
+
+    const removeAdditionalImage = (index: number) => {
+        const newFiles = additionalFiles.filter((_, i) => i !== index);
+        const newPreviews = additionalPreviews.filter((_, i) => i !== index);
+        setAdditionalFiles(newFiles);
+        setAdditionalPreviews(newPreviews);
     };
 
     const handleOptionChange = (index: number, field: "key" | "value", val: string) => {
@@ -74,6 +100,20 @@ export default function AddProduct() {
     const removeOption = (index: number) => {
         const newOptions = options.filter((_, i) => i !== index);
         setOptions(newOptions);
+    };
+
+    const handleAddTag = (e: React.KeyboardEvent<HTMLInputElement>) => {
+        if (e.key === 'Enter' && currentTag.trim()) {
+            e.preventDefault();
+            if (!tags.includes(currentTag.trim())) {
+                setTags([...tags, currentTag.trim()]);
+            }
+            setCurrentTag("");
+        }
+    };
+
+    const removeTag = (tagToRemove: string) => {
+        setTags(tags.filter(tag => tag !== tagToRemove));
     };
 
     const handleSubmit = async (e: React.FormEvent) => {
@@ -98,6 +138,18 @@ export default function AddProduct() {
                 });
             }
 
+            // Convert additional images
+            const additionalBase64: string[] = [];
+            for (const file of additionalFiles) {
+                const b64 = await new Promise<string>((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onload = () => resolve(reader.result as string);
+                    reader.onerror = reject;
+                    reader.readAsDataURL(file);
+                });
+                additionalBase64.push(b64);
+            }
+
             const payload = {
                 ...form,
                 weight_g: form.weight_g ? parseFloat(form.weight_g) : null,
@@ -105,7 +157,9 @@ export default function AddProduct() {
                 manual_rating: form.manual_rating ? parseFloat(form.manual_rating) : null,
                 qty: parseInt(form.qty),
                 options: optionsDict,
-                image_base64: base64Image
+                tags: tags,
+                image_base64: base64Image,
+                additional_images: additionalBase64
             };
 
             const res = await fetch("/products", {
@@ -129,6 +183,10 @@ export default function AddProduct() {
             setLoading(false);
         }
     };
+
+
+
+
 
     return (
         <div className="page-container">
@@ -215,6 +273,43 @@ export default function AddProduct() {
                             />
                         </div>
                     </div>
+
+
+                    <div className="form-group">
+                        <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <TagIcon size={14} /> Product Tags
+                        </label>
+                        <input
+                            className="form-input"
+                            value={currentTag}
+                            onChange={e => setCurrentTag(e.target.value)}
+                            onKeyDown={handleAddTag}
+                            placeholder="Type a tag and press Enter..."
+                        />
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 8 }}>
+                            {tags.map((tag, idx) => (
+                                <span key={idx} style={{
+                                    background: 'var(--accent-glow)',
+                                    color: 'var(--accent)',
+                                    padding: '4px 8px',
+                                    borderRadius: '12px',
+                                    fontSize: '12px',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: 6
+                                }}>
+                                    #{tag}
+                                    <button
+                                        type="button"
+                                        onClick={() => removeTag(tag)}
+                                        style={{ background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', padding: 0, display: 'flex' }}
+                                    >
+                                        &times;
+                                    </button>
+                                </span>
+                            ))}
+                        </div>
+                    </div>
                 </div>
 
                 {/* Right Column: Details & Media */}
@@ -260,6 +355,23 @@ export default function AddProduct() {
                                 disabled={compressing}
                             />
                         </div>
+                    </div>
+
+                    {/* Additional Images UI */}
+                    <div style={{ marginTop: 12, marginBottom: 20 }}>
+                        <label className="form-label" style={{ fontSize: 12 }}>Additional Images</label>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                            {additionalPreviews.map((src, idx) => (
+                                <div key={idx} style={{ position: 'relative', width: 60, height: 60 }}>
+                                    <img src={src} style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: 4 }} />
+                                    <button type="button" onClick={() => removeAdditionalImage(idx)} style={{ position: 'absolute', top: -4, right: -4, background: 'red', color: 'white', borderRadius: '50%', width: 16, height: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, border: 'none', cursor: 'pointer' }}>&times;</button>
+                                </div>
+                            ))}
+                            <div className="image-upload" style={{ width: 60, height: 60, minHeight: 60, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => document.getElementById('add-files')?.click()}>
+                                <Plus size={20} />
+                            </div>
+                        </div>
+                        <input id="add-files" type="file" multiple accept="image/*" style={{ display: 'none' }} onChange={handleAdditionalImagesChange} />
                     </div>
 
                     <div className="grid-cols-2">
@@ -331,7 +443,7 @@ export default function AddProduct() {
                         </button>
                     </div>
                 </div>
-            </form>
-        </div>
+            </form >
+        </div >
     );
 }

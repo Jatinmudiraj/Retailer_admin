@@ -2,8 +2,9 @@ import React, { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import toast from "react-hot-toast";
 import { apiGet } from "../api";
-import { Package, Image as ImageIcon, CreditCard, PenTool, Layers, CheckCircle2 } from "lucide-react";
+import { Package, Image as ImageIcon, CreditCard, PenTool, Layers, CheckCircle2, Tag as TagIcon, Plus } from "lucide-react";
 import imageCompression from "browser-image-compression";
+import Loader from "../components/Loader";
 
 export default function EditProduct() {
     const { sku } = useParams();
@@ -28,9 +29,15 @@ export default function EditProduct() {
     // Options State (Dynamic Key-Value pairs)
     const [options, setOptions] = useState<{ key: string, value: string }[]>([{ key: "", value: "" }]);
 
+    // Tags State
+    const [tags, setTags] = useState<string[]>([]);
+    const [currentTag, setCurrentTag] = useState("");
+
     // Image State
     const [imageFile, setImageFile] = useState<File | null>(null);
     const [imagePreview, setImagePreview] = useState<string | null>(null);
+    const [additionalFiles, setAdditionalFiles] = useState<File[]>([]);
+    const [additionalPreviews, setAdditionalPreviews] = useState<string[]>([]);
     const [compressing, setCompressing] = useState(false);
 
     useEffect(() => {
@@ -57,8 +64,19 @@ export default function EditProduct() {
                     setOptions(opts.length > 0 ? opts : [{ key: "", value: "" }]);
                 }
 
+                if (data.tags) {
+                    setTags(data.tags);
+                }
+
                 if (data.primary_image) {
                     setImagePreview(data.primary_image);
+                }
+
+                if (data.images && Array.isArray(data.images)) {
+                    // Filter out primary image from additional images list if needed, 
+                    // or just use non-primary ones.
+                    const extras = data.images.filter((img: any) => !img.is_primary).map((img: any) => img.url);
+                    setAdditionalPreviews(extras);
                 }
             })
             .catch(err => {
@@ -93,6 +111,86 @@ export default function EditProduct() {
         }
     };
 
+    const handleAdditionalImagesChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+        if (e.target.files) {
+            setCompressing(true);
+            const files = Array.from(e.target.files);
+            const newFiles: File[] = [];
+            const newPreviews: string[] = [];
+
+            for (const file of files) {
+                try {
+                    const compressed = await imageCompression(file, { maxSizeMB: 1, maxWidthOrHeight: 1920, useWebWorker: true });
+                    newFiles.push(compressed);
+                    newPreviews.push(URL.createObjectURL(compressed));
+                } catch (e) {
+                    newFiles.push(file);
+                    newPreviews.push(URL.createObjectURL(file));
+                }
+            }
+
+            setAdditionalFiles([...additionalFiles, ...newFiles]);
+            setAdditionalPreviews([...additionalPreviews, ...newPreviews]);
+            setCompressing(false);
+        }
+    };
+
+    const removeAdditionalImage = (index: number) => {
+        // Note: This only removes locally added images or hides existing ones from view. 
+        // For deleting existing server images, we might need a separate API call or logic.
+        // For now, let's assume we are just managing the list to be sent (which only ADDs new ones).
+        // If the user wants to delete specific existing images, that requires a delete endpoint.
+
+        // However, to keep UI consistent, let's support removing newly added ones easily.
+        // Removing pre-existing ones from the preview list won't delete them from server unless we track deletions.
+        // For this version, let's just handle local array.
+
+        // Helper: if index < number of initial server images, it's a server image (mock logic for now).
+        // Actually best way: separate server images vs new images? 
+        // The prompt asked for "upload multiple images", implying addition. 
+        // Let's implement full list management for new files.
+        // Existing images deletion is a separate requirement usually, but let's allow removing new ones.
+
+        // Real robust way: 
+        // We have `additionalFiles` (new) and `additionalPreviews` (mixed).
+        // We need to know which are new.
+
+        // Simplified: `additionalPreviews` holds ALL. 
+        // `additionalFiles` holds NEW.
+        // If we remove an image, we need to know if it was a file or a URL.
+
+        // Let's rely on standard logic: 
+        // We can't easily "delete" a server image via "PUT" payload usually unless API supports "replace all".
+        // Our backend supports "ADDITIONAL_IMAGES" (append).
+        // To DELETE, we usually need a delete endpoint.
+        // Let's support removing NEWly added images.
+
+        // Filter logic:
+        // We need to find the corresponding file in `additionalFiles`.
+        // This is tricky if we mix them in one preview array.
+
+        // Let's keep it simple: 
+        // Only allow removing NEWly added images for now to ensure safety.
+        // OR, just update `additionalPreviews` and `additionalFiles`.
+
+        // If we remove index `i` from `additionalPreviews`:
+        // We need to find if it corresponds to a file in `additionalFiles`.
+        // Since we APPEND new files, the last `N` previews are the new files.
+        const numServerImages = additionalPreviews.length - additionalFiles.length;
+
+        if (index < numServerImages) {
+            toast.error("Deleting existing images is not supported in this view yet.");
+            return;
+        }
+
+        const fileIndex = index - numServerImages;
+        const newFiles = additionalFiles.filter((_, i) => i !== fileIndex);
+        const newPreviews = additionalPreviews.filter((_, i) => i !== index);
+
+        setAdditionalFiles(newFiles);
+        setAdditionalPreviews(newPreviews);
+    };
+
     const handleOptionChange = (index: number, field: "key" | "value", val: string) => {
         const newOptions = [...options];
         newOptions[index][field] = val;
@@ -106,6 +204,20 @@ export default function EditProduct() {
     const removeOption = (index: number) => {
         const newOptions = options.filter((_, i) => i !== index);
         setOptions(newOptions);
+    };
+
+    const handleAddTag = (e: React.KeyboardEvent<HTMLInputElement>) => {
+        if (e.key === 'Enter' && currentTag.trim()) {
+            e.preventDefault();
+            if (!tags.includes(currentTag.trim())) {
+                setTags([...tags, currentTag.trim()]);
+            }
+            setCurrentTag("");
+        }
+    };
+
+    const removeTag = (tagToRemove: string) => {
+        setTags(tags.filter(tag => tag !== tagToRemove));
     };
 
     const handleSubmit = async (e: React.FormEvent) => {
@@ -124,6 +236,18 @@ export default function EditProduct() {
                 });
             }
 
+            // 2. Prepare Additional Images Base64
+            const additionalBase64: string[] = [];
+            for (const file of additionalFiles) {
+                const b64 = await new Promise<string>((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.onload = () => resolve(reader.result as string);
+                    reader.onerror = reject;
+                    reader.readAsDataURL(file);
+                });
+                additionalBase64.push(b64);
+            }
+
             // 2. Construct options
             const optionsDict: Record<string, string> = {};
             options.forEach(opt => {
@@ -137,7 +261,10 @@ export default function EditProduct() {
                 manual_rating: form.manual_rating ? parseFloat(form.manual_rating) : null,
                 qty: parseInt(form.qty),
                 options: optionsDict,
+
+                tags: tags,
                 image_base64: imageBase64,
+                additional_images: additionalBase64,
             };
 
             const res = await fetch(`/products/${sku}`, {
@@ -161,7 +288,7 @@ export default function EditProduct() {
         }
     };
 
-    if (loading && !form.name) return <div className="page-container" style={{ padding: '40px' }}>Loading Product...</div>;
+    if (loading && !form.name) return <Loader fullscreen text="Loading Product..." />;
 
     return (
         <div className="page-container">
@@ -243,6 +370,43 @@ export default function EditProduct() {
                             />
                         </div>
                     </div>
+
+
+                    <div className="form-group">
+                        <label className="form-label" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                            <TagIcon size={14} /> Product Tags
+                        </label>
+                        <input
+                            className="form-input"
+                            value={currentTag}
+                            onChange={e => setCurrentTag(e.target.value)}
+                            onKeyDown={handleAddTag}
+                            placeholder="Type a tag and press Enter..."
+                        />
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, marginTop: 8 }}>
+                            {tags.map((tag, idx) => (
+                                <span key={idx} style={{
+                                    background: 'var(--accent-glow)',
+                                    color: 'var(--accent)',
+                                    padding: '4px 8px',
+                                    borderRadius: '12px',
+                                    fontSize: '12px',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: 6
+                                }}>
+                                    #{tag}
+                                    <button
+                                        type="button"
+                                        onClick={() => removeTag(tag)}
+                                        style={{ background: 'none', border: 'none', color: 'inherit', cursor: 'pointer', padding: 0, display: 'flex' }}
+                                    >
+                                        &times;
+                                    </button>
+                                </span>
+                            ))}
+                        </div>
+                    </div>
                 </div>
 
                 {/* Right Column: Details & Media */}
@@ -290,6 +454,23 @@ export default function EditProduct() {
                                 disabled={compressing}
                             />
                         </div>
+                    </div>
+
+                    {/* Additional Images */}
+                    <div style={{ marginTop: 12 }}>
+                        <label className="form-label" style={{ fontSize: 12 }}>Additional Images (New)</label>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+                            {additionalPreviews.map((src, idx) => (
+                                <div key={idx} style={{ position: 'relative', width: 60, height: 60 }}>
+                                    <img src={src} style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: 4 }} />
+                                    <button type="button" onClick={() => removeAdditionalImage(idx)} style={{ position: 'absolute', top: -4, right: -4, background: 'red', color: 'white', borderRadius: '50%', width: 16, height: 16, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, border: 'none', cursor: 'pointer' }}>&times;</button>
+                                </div>
+                            ))}
+                            <div className="image-upload" style={{ width: 60, height: 60, minHeight: 60, padding: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }} onClick={() => document.getElementById('add-files')?.click()}>
+                                <Plus size={20} />
+                            </div>
+                        </div>
+                        <input id="add-files" type="file" multiple accept="image/*" style={{ display: 'none' }} onChange={handleAdditionalImagesChange} />
                     </div>
 
                     <div className="grid-cols-2">
@@ -363,7 +544,7 @@ export default function EditProduct() {
                         </button>
                     </div>
                 </div>
-            </form>
-        </div>
+            </form >
+        </div >
     );
 }

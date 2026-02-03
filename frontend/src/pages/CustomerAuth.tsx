@@ -81,64 +81,65 @@ export default function CustomerAuth() {
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
-                fontFamily: "'Inter', sans-serif"
+                fontFamily: "'Outfit', sans-serif"
             }}>
                 {/* Background ambient light */}
-                <div style={{ position: "absolute", top: "20%", left: "50%", transform: "translateX(-50%)", width: 500, height: 500, background: "#D4AF37", filter: "blur(200px)", opacity: 0.1, zIndex: 0 }}></div>
+                <div style={{ position: "absolute", top: "30%", left: "50%", transform: "translateX(-50%)", width: 600, height: 600, background: "#D4AF37", filter: "blur(250px)", opacity: 0.05, zIndex: 0 }}></div>
 
-                <div className="card" style={{
-                    width: 420,
-                    padding: 40,
-                    background: "rgba(20, 20, 20, 0.8)",
-                    backdropFilter: "blur(20px)",
-                    borderRadius: 24,
-                    border: "1px solid rgba(255, 255, 255, 0.1)",
-                    boxShadow: "0 20px 40px rgba(0,0,0,0.5)",
+                <div style={{
+                    width: 440,
+                    padding: "48px 40px",
+                    background: "#fff",
+                    borderRadius: 32,
+                    border: "1px solid rgba(0,0,0,0.04)",
+                    boxShadow: "0 20px 60px rgba(0,0,0,0.05)",
                     zIndex: 1,
                     position: "relative"
                 }}>
-                    <div style={{ textAlign: "center", marginBottom: 30 }}>
+                    <div style={{ textAlign: "center", marginBottom: 40 }}>
                         <div style={{
-                            width: 60, height: 60, margin: "0 auto 20px",
-                            background: "linear-gradient(135deg, #D4AF37 0%, #aa8b2c 100%)",
-                            borderRadius: "50%", display: "flex", alignItems: "center", justifyContent: "center",
-                            boxShadow: "0 10px 20px rgba(212, 175, 55, 0.2)"
+                            width: 64, height: 64, margin: "0 auto 24px",
+                            background: "linear-gradient(135deg, #fdfbf7 0%, #f5f5f5 100%)",
+                            borderRadius: 20, display: "flex", alignItems: "center", justifyContent: "center",
+                            border: "1px solid rgba(0,0,0,0.05)"
                         }}>
-                            <User size={28} color="#000" />
+                            <User size={28} color="#D4AF37" />
                         </div>
-                        <h2 style={{ fontSize: 26, fontWeight: 700, margin: "0 0 8px 0" }}>
+                        <h2 style={{ fontSize: 32, fontWeight: 800, margin: "0 0 10px 0", color: "#1a1a1a", letterSpacing: -0.5 }}>
                             {googleProfile ? "Complete Profile" : (isSignup ? "Create Account" : "Welcome Back")}
                         </h2>
-                        <p style={{ color: "#888", fontSize: 14 }}>
+                        <p style={{ color: "#666", fontSize: 15, fontWeight: 500 }}>
                             {googleProfile ? "One last step to secure your account." : (isSignup ? "Join our exclusive club." : "Sign in to access your vault.")}
                         </p>
                     </div>
 
                     {!googleProfile && (
-                        <div style={{ marginBottom: 24, display: "flex", justifyContent: "center" }}>
-                            <GoogleLogin
-                                onSuccess={handleGoogleSuccess}
-                                onError={() => toast.error("Google Login Failed")}
-                                theme="filled_black"
-                                shape="pill"
-                                width="340"
-                                text="continue_with"
-                            />
+                        <div style={{ marginBottom: 32, display: "flex", justifyContent: "center" }}>
+                            <div style={{ width: "100%", overflow: "hidden" }}>
+                                <GoogleLogin
+                                    onSuccess={handleGoogleSuccess}
+                                    onError={() => toast.error("Google Login Failed")}
+                                    theme="outline"
+                                    shape="pill"
+                                    width="100%"
+                                    text="continue_with"
+                                />
+                            </div>
                         </div>
                     )}
 
                     {!googleProfile && (
-                        <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 24 }}>
-                            <div style={{ flex: 1, height: 1, background: "rgba(255,255,255,0.1)" }}></div>
-                            <div style={{ fontSize: 11, color: "#666", textTransform: "uppercase" }}>Or continue with phone</div>
-                            <div style={{ flex: 1, height: 1, background: "rgba(255,255,255,0.1)" }}></div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 32 }}>
+                            <div style={{ flex: 1, height: 1, background: "#eee" }}></div>
+                            <div style={{ fontSize: 11, color: "#999", textTransform: "uppercase", fontWeight: 700, letterSpacing: 1 }}>Or</div>
+                            <div style={{ flex: 1, height: 1, background: "#eee" }}></div>
                         </div>
                     )}
 
-                    <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+                    <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 20 }}>
                         {(isSignup || googleProfile) && (
                             <div style={{ position: "relative" }}>
-                                <User size={16} style={{ position: "absolute", left: 16, top: "50%", transform: "translateY(-50%)", color: "#666" }} />
+                                <User size={18} style={{ position: "absolute", left: 16, top: "50%", transform: "translateY(-50%)", color: "#999" }} />
                                 <input
                                     placeholder="Full Name"
                                     value={name}
@@ -146,53 +147,61 @@ export default function CustomerAuth() {
                                     required
                                     disabled={!!googleProfile}
                                     style={{
-                                        width: "100%", padding: "12px 16px 12px 42px",
-                                        background: "rgba(255,255,255,0.05)",
-                                        border: "1px solid rgba(255,255,255,0.1)",
-                                        color: "#fff", borderRadius: 12, outline: "none", fontSize: 14,
-                                        opacity: googleProfile ? 0.6 : 1
+                                        width: "100%", padding: "14px 16px 14px 48px",
+                                        background: "#f9f9f9",
+                                        border: "1px solid #eee",
+                                        color: "#1a1a1a", borderRadius: 16, outline: "none", fontSize: 14,
+                                        opacity: googleProfile ? 0.6 : 1, transition: "border-color 0.2s"
                                     }}
+                                    onFocus={e => e.target.style.borderColor = "#D4AF37"}
+                                    onBlur={e => e.target.style.borderColor = "#eee"}
                                 />
                             </div>
                         )}
 
                         <div style={{ position: "relative" }}>
-                            <Phone size={16} style={{ position: "absolute", left: 16, top: "50%", transform: "translateY(-50%)", color: "#666" }} />
+                            <Phone size={18} style={{ position: "absolute", left: 16, top: "50%", transform: "translateY(-50%)", color: "#999" }} />
                             <input
                                 placeholder="Phone Number"
                                 value={phone}
                                 onChange={e => setPhone(e.target.value)}
                                 required
                                 style={{
-                                    width: "100%", padding: "12px 16px 12px 42px",
-                                    background: "rgba(255,255,255,0.05)",
-                                    border: "1px solid rgba(255,255,255,0.1)",
-                                    color: "#fff", borderRadius: 12, outline: "none", fontSize: 14
+                                    width: "100%", padding: "14px 16px 14px 48px",
+                                    background: "#f9f9f9",
+                                    border: "1px solid #eee",
+                                    color: "#1a1a1a", borderRadius: 16, outline: "none", fontSize: 14,
+                                    transition: "border-color 0.2s"
                                 }}
+                                onFocus={e => e.target.style.borderColor = "#D4AF37"}
+                                onBlur={e => e.target.style.borderColor = "#eee"}
                             />
                         </div>
 
                         {(isSignup && !googleProfile) && (
                             <div style={{ position: "relative" }}>
-                                <div style={{ position: "absolute", left: 16, top: "50%", transform: "translateY(-50%)", color: "#666", fontSize: 14 }}>@</div>
+                                <div style={{ position: "absolute", left: 18, top: "50%", transform: "translateY(-50%)", color: "#999", fontSize: 16 }}>@</div>
                                 <input
-                                    placeholder="Email (Optional)"
+                                    placeholder="Email Address"
                                     type="email"
                                     value={email}
                                     onChange={e => setEmail(e.target.value)}
                                     style={{
-                                        width: "100%", padding: "12px 16px 12px 42px",
-                                        background: "rgba(255,255,255,0.05)",
-                                        border: "1px solid rgba(255,255,255,0.1)",
-                                        color: "#fff", borderRadius: 12, outline: "none", fontSize: 14
+                                        width: "100%", padding: "14px 16px 14px 48px",
+                                        background: "#f9f9f9",
+                                        border: "1px solid #eee",
+                                        color: "#1a1a1a", borderRadius: 16, outline: "none", fontSize: 14,
+                                        transition: "border-color 0.2s"
                                     }}
+                                    onFocus={e => e.target.style.borderColor = "#D4AF37"}
+                                    onBlur={e => e.target.style.borderColor = "#eee"}
                                 />
                             </div>
                         )}
 
                         {!googleProfile && (
                             <div style={{ position: "relative" }}>
-                                <Lock size={16} style={{ position: "absolute", left: 16, top: "50%", transform: "translateY(-50%)", color: "#666" }} />
+                                <Lock size={18} style={{ position: "absolute", left: 16, top: "50%", transform: "translateY(-50%)", color: "#999" }} />
                                 <input
                                     placeholder="Password"
                                     type="password"
@@ -200,11 +209,14 @@ export default function CustomerAuth() {
                                     onChange={e => setPassword(e.target.value)}
                                     required
                                     style={{
-                                        width: "100%", padding: "12px 16px 12px 42px",
-                                        background: "rgba(255,255,255,0.05)",
-                                        border: "1px solid rgba(255,255,255,0.1)",
-                                        color: "#fff", borderRadius: 12, outline: "none", fontSize: 14
+                                        width: "100%", padding: "14px 16px 14px 48px",
+                                        background: "#f9f9f9",
+                                        border: "1px solid #eee",
+                                        color: "#1a1a1a", borderRadius: 16, outline: "none", fontSize: 14,
+                                        transition: "border-color 0.2s"
                                     }}
+                                    onFocus={e => e.target.style.borderColor = "#D4AF37"}
+                                    onBlur={e => e.target.style.borderColor = "#eee"}
                                 />
                             </div>
                         )}
@@ -214,26 +226,26 @@ export default function CustomerAuth() {
                             disabled={loading}
                             style={{
                                 background: "#D4AF37", color: "#000",
-                                padding: "14px", border: "none", borderRadius: 12,
-                                fontWeight: 700, fontSize: 14, cursor: "pointer",
-                                marginTop: 10, display: "flex", justifyContent: "center", alignItems: "center", gap: 8,
+                                padding: "16px", border: "none", borderRadius: 50,
+                                fontWeight: 800, fontSize: 16, cursor: "pointer",
+                                marginTop: 12, display: "flex", justifyContent: "center", alignItems: "center", gap: 10,
                                 transition: "all 0.2s"
                             }}
-                            onMouseOver={e => e.currentTarget.style.transform = "scale(1.02)"}
-                            onMouseOut={e => e.currentTarget.style.transform = "scale(1)"}
+                            onMouseOver={e => e.currentTarget.style.transform = "translateY(-2px)"}
+                            onMouseOut={e => e.currentTarget.style.transform = "translateY(0)"}
                         >
-                            {loading ? "Processing..." : (googleProfile ? "Complete Registration" : (isSignup ? "Sign Up" : "Sign In"))}
-                            {!loading && <ArrowRight size={16} />}
+                            {loading ? "Processing..." : (googleProfile ? "Complete Registration" : (isSignup ? "Create Account" : "Sign In"))}
+                            {!loading && <ArrowRight size={18} />}
                         </button>
                     </form>
 
                     {!googleProfile && (
-                        <div style={{ marginTop: 24, textAlign: "center" }}>
+                        <div style={{ marginTop: 32, textAlign: "center" }}>
                             <button
                                 onClick={() => setIsSignup(!isSignup)}
                                 style={{
                                     background: "none", border: "none", color: "#D4AF37",
-                                    cursor: "pointer", fontSize: 13, fontWeight: 500
+                                    cursor: "pointer", fontSize: 14, fontWeight: 700
                                 }}
                             >
                                 {isSignup ? "Already have an account? Sign In" : "New customer? Create account"}
@@ -242,9 +254,9 @@ export default function CustomerAuth() {
                     )}
 
                     {/* Admin Login Link */}
-                    <div style={{ marginTop: 30, paddingTop: 20, borderTop: "1px solid rgba(255,255,255,0.1)", textAlign: "center" }}>
-                        <Link to="/login" style={{ fontSize: 12, color: "#666", textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 6 }}>
-                            <ShieldCheck size={12} /> Are you an administrator? Login here
+                    <div style={{ marginTop: 40, paddingTop: 24, borderTop: "1px solid #f0f0f0", textAlign: "center" }}>
+                        <Link to="/login" style={{ fontSize: 13, color: "#999", textDecoration: "none", display: "inline-flex", alignItems: "center", gap: 8, fontWeight: 500 }}>
+                            <ShieldCheck size={14} /> Administrator Access
                         </Link>
                     </div>
                 </div>

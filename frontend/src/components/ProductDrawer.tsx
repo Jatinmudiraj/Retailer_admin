@@ -31,6 +31,7 @@ export default function ProductDrawer(props: {
     const [phone, setPhone] = useState("");
     const [loading, setLoading] = useState(false);
     const [imgError, setImgError] = useState(false);
+    const [reserveQty, setReserveQty] = useState(1);
 
     async function reserve() {
         if (!name || !phone) {
@@ -255,20 +256,58 @@ export default function ProductDrawer(props: {
                             <Calendar size={16} /> Reservation Status
                         </div>
 
-                        {product.reserved_name ? (
-                            <div style={{ background: "rgba(212, 175, 55, 0.1)", border: "1px solid rgba(212, 175, 55, 0.3)", borderRadius: 8, padding: 16 }}>
+                        {/* Existing Reservations List */}
+                        {product.reservations && product.reservations.length > 0 && (
+                            <div style={{ marginBottom: 16 }}>
+                                <div style={{ fontSize: 12, fontWeight: 600, color: "var(--text-muted)", marginBottom: 8 }}>Active Reservations ({product.reservations.length})</div>
+                                {product.reservations.map(res => (
+                                    <div key={res.id} style={{ background: "rgba(212, 175, 55, 0.1)", border: "1px solid rgba(212, 175, 55, 0.3)", borderRadius: 8, padding: 12, marginBottom: 8, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                                        <div>
+                                            <div style={{ fontSize: 13, fontWeight: 600, color: "var(--accent)" }}>{res.name}</div>
+                                            <div style={{ fontSize: 11, color: "var(--text-muted)" }}>Qty: {res.qty} • {formatDate(res.created_at)}</div>
+                                        </div>
+                                        <button
+                                            className="btn2"
+                                            onClick={async () => {
+                                                if (!window.confirm("Release this reservation?")) return;
+                                                setLoading(true);
+                                                try {
+                                                    await apiPost(`/reservations/${res.id}/release`, {});
+                                                    toast.success("Reservation released");
+                                                    onRefresh();
+                                                } catch (e: any) {
+                                                    toast.error(e.message);
+                                                } finally {
+                                                    setLoading(false);
+                                                }
+                                            }}
+                                            disabled={loading}
+                                            style={{ padding: "4px 8px", fontSize: 11 }}
+                                        >
+                                            Release
+                                        </button>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+
+                        {/* Legacy Reservation Fallback Display if no detailed reservations but legacy flags are set */}
+                        {(!product.reservations || product.reservations.length === 0) && product.reserved_name && (
+                            <div style={{ background: "rgba(212, 175, 55, 0.1)", border: "1px solid rgba(212, 175, 55, 0.3)", borderRadius: 8, padding: 16, marginBottom: 16 }}>
                                 <div style={{ marginBottom: 12 }}>
-                                    Reserved for <b style={{ color: "var(--accent)" }}>{product.reserved_name}</b>
-                                    {product.reserved_phone && <span style={{ opacity: 0.7 }}> ({product.reserved_phone})</span>}
+                                    Reserved for <b style={{ color: "var(--accent)" }}>{product.reserved_name}</b> (Legacy)
                                 </div>
                                 <button className="btn2" onClick={release} disabled={loading} style={{ width: "100%" }}>
-                                    Release Reservation
+                                    Release All
                                 </button>
                             </div>
-                        ) : (
+                        )}
+
+                        {/* Reserve Form */}
+                        {product.qty > 0 ? (
                             <div style={{ display: "flex", gap: 8, flexDirection: "column" }}>
-                                <div className="grid-cols-2" style={{ marginBottom: 0 }}>
-                                    <div className="form-group" style={{ marginBottom: 8 }}>
+                                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                                    <div className="form-group" style={{ marginBottom: 0 }}>
                                         <div style={{ position: "relative" }}>
                                             <User size={14} style={{ position: "absolute", top: 12, left: 12, opacity: 0.5 }} />
                                             <input
@@ -280,7 +319,7 @@ export default function ProductDrawer(props: {
                                             />
                                         </div>
                                     </div>
-                                    <div className="form-group" style={{ marginBottom: 8 }}>
+                                    <div className="form-group" style={{ marginBottom: 0 }}>
                                         <div style={{ position: "relative" }}>
                                             <Phone size={14} style={{ position: "absolute", top: 12, left: 12, opacity: 0.5 }} />
                                             <input
@@ -293,9 +332,41 @@ export default function ProductDrawer(props: {
                                         </div>
                                     </div>
                                 </div>
-                                <button className="btn" onClick={reserve} disabled={loading || !name}>
-                                    Reserve Item
+                                <div className="form-group" style={{ marginBottom: 8 }}>
+                                    <label style={{ fontSize: 12, color: "var(--text-muted)" }}>Quantity to Reserve (Max: {product.qty})</label>
+                                    <input
+                                        type="number"
+                                        className="form-input"
+                                        min="1"
+                                        max={product.qty}
+                                        value={reserveQty}
+                                        onChange={(e) => setReserveQty(Math.max(1, Math.min(parseInt(e.target.value) || 1, product.qty)))}
+                                    />
+                                </div>
+
+                                <button className="btn" onClick={() => {
+                                    if (!name || !phone) {
+                                        toast.error("Name and Phone are required.");
+                                        return;
+                                    }
+                                    setLoading(true);
+                                    apiPost(`/products/${encodeURIComponent(product.sku)}/reserve`, { name, phone, qty: reserveQty })
+                                        .then(() => {
+                                            toast.success("Reserved successfully");
+                                            setName("");
+                                            setPhone("");
+                                            setReserveQty(1);
+                                            onRefresh();
+                                        })
+                                        .catch((e: any) => toast.error(e.message))
+                                        .finally(() => setLoading(false));
+                                }} disabled={loading || !name}>
+                                    Reserve {reserveQty} Item{reserveQty > 1 ? 's' : ''}
                                 </button>
+                            </div>
+                        ) : (
+                            <div style={{ textAlign: "center", padding: 12, background: "rgba(255,255,255,0.05)", borderRadius: 8, color: "var(--text-muted)", fontSize: 13 }}>
+                                Out of Stock - Cannot Reserve
                             </div>
                         )}
                     </div>

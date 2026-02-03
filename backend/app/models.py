@@ -65,9 +65,11 @@ class Product(Base):
     manual_rating: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     terms: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     options: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
+    tags: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
 
     images = relationship("ProductImage", back_populates="product", cascade="all, delete-orphan")
     ratings = relationship("Rating", back_populates="product", cascade="all, delete-orphan")
+    reservations = relationship("Reservation", back_populates="product", cascade="all, delete-orphan")
 
 
 class ProductImage(Base):
@@ -202,3 +204,15 @@ class AdminAccount(Base):
     name: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
     picture: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+class Reservation(Base):
+    __tablename__ = "reservations"
+    id: Mapped[str] = mapped_column(String(40), primary_key=True, default=_uuid)
+    sku: Mapped[str] = mapped_column(String(120), ForeignKey("products.sku"), nullable=False)
+    name: Mapped[str] = mapped_column(String(120), nullable=False)
+    phone: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
+    qty: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+
+    product = relationship("Product", back_populates="reservations")
