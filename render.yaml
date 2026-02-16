@@ -31,6 +31,8 @@ services:
           type: web
           name: royaliq-frontend
           property: host
+      - key: AWS_REGION
+        value: eu-north-1
 
   # -----------------------------
   # FRONTEND SERVICE (React/Vite)
@@ -49,3 +51,7 @@ services:
           property: host
       - key: VITE_GOOGLE_CLIENT_ID
         sync: false
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html

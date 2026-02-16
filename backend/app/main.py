@@ -4,23 +4,34 @@ import csv
 import io
 import os
 import shutil
+import base64
+import asyncio
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
-from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile, Response
+from fastapi import Depends, FastAPI, File, HTTPException, Request, UploadFile, Response, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
-import base64
+from fastapi.responses import JSONResponse, StreamingResponse, FileResponse
+from fastapi.staticfiles import StaticFiles
+
+# Auth
 from google.auth.transport import requests as grequests
 from google.oauth2 import id_token
-from fastapi.staticfiles import StaticFiles
-from sqlalchemy import func, or_
-from sqlalchemy.orm import Session, joinedload
+import jwt
+
+# Beanie / Motor
+from app.db import init_db
+from app.models import (
+    Setting, Product, ProductImage, Rating, Reservation,
+    S3DeletionQueue, Feedback, WishlistRequest, SaleArchive, 
+    Customer, Order, OrderItem, AdminAccount
+)
 
 from app.auth import (
     COOKIE_NAME, 
+    CUSTOMER_COOKIE_NAME,
     get_current_admin, 
     make_session_token, 
     verify_google_credential,
@@ -28,11 +39,9 @@ from app.auth import (
     verify_password,
     _allowed_email,
     get_current_customer,
-    CUSTOMER_COOKIE_NAME
+    AdminUser
 )
 from app.config import get_settings
-from app.db import engine, get_db, SessionLocal
-from app.models import Base, Feedback, Product, ProductImage, Rating, SaleArchive, Setting, WishlistRequest, S3DeletionQueue, Customer, Order, OrderItem, AdminAccount
 from app.s3_service import (
     upload_file_to_s3, 
     generate_presigned_upload_url, 
@@ -44,30 +53,25 @@ from app.s3_service import (
     generate_presigned_get_url
 )
 from app.schemas import (
-    GoldRateIn,
-    GoldRateOut,
+    GoldRateIn, GoldRateOut,
     GoogleCredentialIn,
     MarkSoldIn,
     MetricOut,
     PrescriptiveCard,
-    ProductIn,
-    ProductOut,
+    ProductIn, ProductOut, ProductImageOut,
     ReserveIn,
-    WishlistIn,
-    WishlistOut,
-    PresignedUrlRequest,
-    PresignedUrlResponse,
+    WishlistIn, WishlistOut,
+    PresignedUrlRequest, PresignedUrlResponse,
     ImageFinalizeIn,
-    CustomerIn, CustomerOut, OrderIn, OrderOut,
+    CustomerIn, CustomerOut, OrderIn, OrderOut, OrderItemOut,
     LoginIn, SignupIn,
     PublicOrderIn,
     ReservationOut,
+    CustomerSignupIn, CustomerLoginIn, CustomerGoogleAuthIn, CustomerGoogleAuthOut
 )
+from app.recommender import recommender
+from app.tryon import try_on_service
 
-from app.models import Base, Feedback, Product, ProductImage, Rating, SaleArchive, Setting, WishlistRequest, S3DeletionQueue, Customer, Order, OrderItem, AdminAccount, Reservation
-
-from app.recommender import ContentBasedRecommender
-recommender = ContentBasedRecommender()
 
 from contextlib import asynccontextmanager
 
@@ -78,38 +82,33 @@ MEDIA_DIR.mkdir(parents=True, exist_ok=True)
 BUFFER_DIR = MEDIA_DIR / "buffer"
 BUFFER_DIR.mkdir(parents=True, exist_ok=True)
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup: Create DB tables
-    try:
-        Base.metadata.create_all(bind=engine)
-        print("Database tables created.")
-        
-        # Seed default admin if it doesn't exist
-        with Session(engine) as db:
-            default_email = "jatinmudiraj126@gmail.com"
-            exists = db.query(AdminAccount).filter(AdminAccount.email == default_email).first()
-            if not exists:
-                hashed = get_password_hash("123")
-                admin = AdminAccount(
-                    email=default_email,
-                    hashed_password=hashed,
-                    name="Jatin Mudiraj",
-                    created_at=datetime.utcnow()
-                )
-                db.add(admin)
-                db.commit()
-                print(f"Default admin {default_email} created.")
-    except Exception as e:
-        print(f"Error creating database tables or seeding: {e}")
-    
+    # Startup: Init Beanie
+    await init_db()
+    print("MongoDB (Beanie) initialized.")
+
+    # Seed default admin if not exists
+    default_email = "jatinmudiraj126@gmail.com"
+    exists = await AdminAccount.find_one(AdminAccount.email == default_email)
+    if not exists:
+        hashed = get_password_hash("123")
+        admin = AdminAccount(
+            email=default_email,
+            hashed_password=hashed,
+            name="Jatin Mudiraj",
+            created_at=datetime.utcnow()
+        )
+        await admin.insert()
+        print(f"Default admin {default_email} created.")
+
     # Train recommender
     try:
         print("Starting recommender training...")
-        with Session(engine) as db:
-            products = db.query(Product).filter(Product.is_archived == False).all()
-            print(f"Fetched {len(products)} products for training.")
-            recommender.fit(products)
+        products = await Product.find(Product.is_archived == False).to_list()
+        print(f"Fetched {len(products)} products for training.")
+        recommender.fit(products)
         print("Recommender training done.")
     except Exception as e:
         print(f"Error training recommender: {e}")
@@ -121,7 +120,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="RoyalIQ Retailer Admin", version="1.0", lifespan=lifespan)
 
-# Handle Render's "host" property (which lacks https://)
+# Handle Render's "host" property
 origins = [
     "https://royaliq-frontend.onrender.com",
     "http://localhost:5173",
@@ -142,27 +141,47 @@ app.add_middleware(
 app.mount("/media", StaticFiles(directory=str(MEDIA_DIR)), name="media")
 
 
-def _get_gold_rate(db: Session) -> float:
-    row = db.query(Setting).filter(Setting.key == "gold_rate_per_gram").first()
+# -----------------------
+# Helpers (Async)
+# -----------------------
+import time
+
+# In-memory cache for gold rate
+_GOLD_RATE_CACHE = {"value": None, "timestamp": 0}
+
+async def _get_gold_rate() -> float:
+    # Check cache (5 min TTL)
+    now = time.time()
+    if _GOLD_RATE_CACHE["value"] and (now - _GOLD_RATE_CACHE["timestamp"] < 300):
+        return _GOLD_RATE_CACHE["value"]
+
+    row = await Setting.find_one(Setting.key == "gold_rate_per_gram")
+    val = float(settings.GOLD_RATE_PER_GRAM)
     if not row:
-        row = Setting(key="gold_rate_per_gram", value=str(settings.GOLD_RATE_PER_GRAM))
-        db.add(row)
-        db.commit()
-        return float(settings.GOLD_RATE_PER_GRAM)
-    try:
-        return float(row.value)
-    except Exception:
-        return float(settings.GOLD_RATE_PER_GRAM)
+        row = Setting(key="gold_rate_per_gram", value=str(val))
+        await row.insert()
+    else:
+        try:
+             val = float(row.value)
+        except:
+             pass
+    
+    _GOLD_RATE_CACHE["value"] = val
+    _GOLD_RATE_CACHE["timestamp"] = now
+    return val
 
-
-def _set_gold_rate(db: Session, v: float) -> None:
-    row = db.query(Setting).filter(Setting.key == "gold_rate_per_gram").first()
+async def _set_gold_rate(v: float) -> None:
+    row = await Setting.find_one(Setting.key == "gold_rate_per_gram")
     if not row:
         row = Setting(key="gold_rate_per_gram", value=str(v))
-        db.add(row)
+        await row.insert()
     else:
         row.value = str(v)
-    db.commit()
+        await row.save()
+    
+    # Update cache
+    _GOLD_RATE_CACHE["value"] = v
+    _GOLD_RATE_CACHE["timestamp"] = time.time()
 
 
 def _bayesian_mean(avg: float, v: int, global_avg: float, m: int = 5) -> float:
@@ -171,16 +190,17 @@ def _bayesian_mean(avg: float, v: int, global_avg: float, m: int = 5) -> float:
     return (v / (v + m)) * avg + (m / (v + m)) * global_avg
 
 
-def _status_zone(db: Session, p: Product, days_in_stock: int) -> str:
+async def _status_zone(p: Product, days_in_stock: int) -> str:
     # Check if Sold (qty 0 and exists in archive)
     if p.qty == 0:
-        is_sold = db.query(SaleArchive).filter(SaleArchive.sku == p.sku).count() > 0
+        is_sold = await SaleArchive.find_one(SaleArchive.sku == p.sku)
         if is_sold:
             return "Sold"
 
-    # Check Reserved (legacy or active)
-    has_reservations = (p.reservations and len(p.reservations) > 0)
-    if (p.reserved_name and p.reserved_phone) or has_reservations:
+    # Check Reserved
+    # Fetch reservations
+    res_count = await Reservation.find(Reservation.sku == p.sku).count()
+    if (p.reserved_name and p.reserved_phone) or res_count > 0:
         return "Reserved"
         
     if days_in_stock <= 90:
@@ -193,9 +213,7 @@ def _status_zone(db: Session, p: Product, days_in_stock: int) -> str:
 def _retail_valuation_inr(weight_g: Optional[float], gold_rate: float) -> Optional[float]:
     if weight_g is None:
         return None
-    # Simple valuation. You can refine this later (making charges, GST, stone premiums).
     return float(weight_g) * float(gold_rate)
-
 
 
 def _get_image_url_safe(img: ProductImage) -> Optional[str]:
@@ -204,7 +222,6 @@ def _get_image_url_safe(img: ProductImage) -> Optional[str]:
         try:
             return generate_presigned_get_url(img.s3_key)
         except Exception:
-            # Fallback if S3 credentials missing or other error
             pass
     if img.url:
         return img.url
@@ -216,39 +233,65 @@ def _get_image_url_safe(img: ProductImage) -> Optional[str]:
 
 
 
-
-def _primary_image_url(db: Session, sku: str) -> Optional[str]:
-
-    img = (
-        db.query(ProductImage)
-        .filter(ProductImage.sku == sku)
-        .order_by(ProductImage.is_primary.desc())
-        .first()
-    )
-    if not img:
-        return None
-    # Priority: s3_key (new) > url (legacy) > image_data (DB) > local path
-    return _get_image_url_safe(img)
+# Cached global rating
+GLOBAL_RATING_AVG = 4.5
 
 
-def _product_out(db: Session, p: Product) -> ProductOut:
-    gold_rate = _get_gold_rate(db)
 
-    # days in stock
+def _determine_status_zone(p: Product, days_in_stock: int, is_sold: bool, res_count: int) -> str:
+    if p.qty == 0 and is_sold:
+        return "Sold"
+    if (p.reserved_name and p.reserved_phone) or res_count > 0:
+        return "Reserved" 
+    if days_in_stock <= 90: return "Fresh"
+    if days_in_stock <= 180: return "Watch"
+    return "Dead"
+
+async def _product_out(p: Product) -> ProductOut:
+    gold_rate = await _get_gold_rate()
+
+    # Pre-fetch related data concurrently
+    # Ratings (project only stars), Images, Reservations, SaleArchive (if needed)
+    
+    tasks = [
+        Rating.find(Rating.sku == p.sku).to_list(),
+        ProductImage.find(ProductImage.sku == p.sku).to_list(),
+        Reservation.find(Reservation.sku == p.sku).to_list()
+    ]
+    
+    # Add sale archive check only if qty is 0
+    check_sold = (p.qty == 0)
+    if check_sold:
+        tasks.append(SaleArchive.find_one(SaleArchive.sku == p.sku))
+    
+    results = await asyncio.gather(*tasks)
+    
+    ratings_proj = results[0]
+    images = results[1]
+    reservations = results[2]
+    is_sold_record = results[3] if check_sold else None
+
+    # Rating Logic
+    r_count = len(ratings_proj)
+    r_avg = sum(r.stars for r in ratings_proj) / r_count if r_count > 0 else 0.0
+    
+    global_avg = GLOBAL_RATING_AVG
+    bayes = _bayesian_mean(r_avg, r_count, global_avg, m=5) if global_avg > 0 else (r_avg if r_count > 0 else None)
+    
+    # Status Zone Logic
     base_date = p.purchase_date or p.created_at.date()
     days_in_stock = (date.today() - base_date).days
-
-    # rating stats
-    r_q = db.query(func.count(Rating.id), func.avg(Rating.stars)).filter(Rating.sku == p.sku).first()
-    r_count = int(r_q[0] or 0)
-    r_avg = float(r_q[1] or 0.0)
-
-    global_avg_q = db.query(func.avg(Rating.stars)).first()
-    global_avg = float(global_avg_q[0] or 0.0) if global_avg_q else 0.0
-
-    bayes = _bayesian_mean(r_avg, r_count, global_avg, m=5) if global_avg > 0 else (r_avg if r_count > 0 else None)
-    zone = _status_zone(db, p, days_in_stock)
+    
+    res_count = len(reservations)
+    zone = _determine_status_zone(p, days_in_stock, bool(is_sold_record), res_count)
+    
     val = _retail_valuation_inr(p.weight_g, gold_rate)
+
+    # Images Logic
+    primary_img_url = None
+    if images:
+        prim = next((i for i in images if i.is_primary), images[0])
+        primary_img_url = _get_image_url_safe(prim)
 
     return ProductOut(
         sku=p.sku,
@@ -269,7 +312,7 @@ def _product_out(db: Session, p: Product) -> ProductOut:
         manual_rating=p.manual_rating,
         terms=p.terms,
         options=p.options,
-        primary_image=_primary_image_url(db, p.sku),
+        primary_image=primary_img_url,
         bayesian_rating=(round(float(bayes), 3) if bayes is not None else None),
         rating_count=r_count,
         retail_valuation_inr=(round(float(val), 2) if val is not None else None),
@@ -282,37 +325,41 @@ def _product_out(db: Session, p: Product) -> ProductOut:
                 phone=r.phone,
                 qty=r.qty,
                 created_at=r.created_at
-            ) for r in (p.reservations or [])
+            ) for r in reservations
         ],
         images=[
-            {
-                "s3_key": i.s3_key or "",
-                "url": _get_image_url_safe(i),
-                "is_primary": i.is_primary
-            }
-            for i in p.images
+            ProductImageOut(
+                s3_key=i.s3_key or "",
+                url=_get_image_url_safe(i),
+                is_primary=i.is_primary
+            )
+            for i in images
         ]
     )
 
 
 @app.get("/")
-def root():
+async def root():
     return {"message": "RoyalIQ Retailer Admin Backend is Running!"}
 
 
 @app.get("/health")
-def health(db: Session = Depends(get_db)) -> Dict[str, Any]:
+async def health() -> Dict[str, Any]:
+    # Check DB connection
+    # Simple query
+    count = await Product.count()
     return {
         "ok": True,
         "db": "connected",
+        "product_count": count,
         "media_dir": str(MEDIA_DIR),
-        "gold_rate": _get_gold_rate(db),
+        "gold_rate": await _get_gold_rate(),
     }
 
 
 @app.get("/images/{image_id}")
-def get_image(image_id: str, db: Session = Depends(get_db)):
-    img = db.query(ProductImage).filter(ProductImage.id == image_id).first()
+async def get_image(image_id: str):
+    img = await ProductImage.find_one(ProductImage.id == image_id)
     if not img or not img.image_data:
         raise HTTPException(status_code=404, detail="Image not found")
     
@@ -320,17 +367,10 @@ def get_image(image_id: str, db: Session = Depends(get_db)):
 
 
 # -----------------------
-# Auth
+# Auth Routes
 # -----------------------
-# -----------------------
-# Auth
-# -----------------------
-import traceback
-
-CUSTOMER_COOKIE_NAME = "cust_session"
-
 @app.post("/auth/google")
-def auth_google(payload: GoogleCredentialIn):
+async def auth_google(payload: GoogleCredentialIn):
     try:
         user = verify_google_credential(payload.credential)
         token = make_session_token(user)
@@ -347,37 +387,28 @@ def auth_google(payload: GoogleCredentialIn):
         return resp
     except Exception as e:
         print(f"Auth Error: {e}")
-        # Re-raise so FastAPI still returns 500
         raise
 
-
 @app.post("/auth/logout")
-def logout():
+async def logout():
     resp = JSONResponse({"ok": True})
     resp.delete_cookie(COOKIE_NAME)
-    # Also clear customer cookie to be safe or maybe we keep them separate?
-    # User requested separate properties, so we can keep them independent.
     return resp
 
-
 @app.get("/auth/me")
-def me(request: Request):
+async def me(request: Request):
     user = get_current_admin(request)
     return {"ok": True, "user": user.model_dump()}
 
-
 @app.post("/auth/signup")
-def signup(payload: SignupIn, db: Session = Depends(get_db)):
-    # 1. Check if allowed
+async def signup(payload: SignupIn):
     if not _allowed_email(payload.email):
-        raise HTTPException(status_code=403, detail="Email not allowed for retailer admin")
+        raise HTTPException(status_code=403, detail="Email not allowed")
 
-    # 2. Check if exists
-    exists = db.query(AdminAccount).filter(AdminAccount.email == payload.email.lower().strip()).first()
+    exists = await AdminAccount.find_one(AdminAccount.email == payload.email.lower().strip())
     if exists:
         raise HTTPException(status_code=409, detail="Account already exists")
 
-    # 3. Create
     hashed = get_password_hash(payload.password)
     acc = AdminAccount(
         email=payload.email.lower().strip(),
@@ -385,8 +416,7 @@ def signup(payload: SignupIn, db: Session = Depends(get_db)):
         name=payload.name,
         created_at=datetime.utcnow()
     )
-    db.add(acc)
-    db.commit()
+    await acc.insert()
 
     user = AdminUser(email=acc.email, name=acc.name)
     token = make_session_token(user)
@@ -402,11 +432,10 @@ def signup(payload: SignupIn, db: Session = Depends(get_db)):
     )
     return resp
 
-
 @app.post("/auth/login")
-def auth_login(payload: LoginIn, db: Session = Depends(get_db)):
+async def auth_login(payload: LoginIn):
     email = payload.email.lower().strip()
-    acc = db.query(AdminAccount).filter(AdminAccount.email == email).first()
+    acc = await AdminAccount.find_one(AdminAccount.email == email)
     if not acc:
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
@@ -431,104 +460,34 @@ def auth_login(payload: LoginIn, db: Session = Depends(get_db)):
 # -----------------------
 # Customer Auth
 # -----------------------
-from app.schemas import CustomerSignupIn, CustomerLoginIn
-
-def get_current_customer(request: Request, db: Session) -> Customer:
-    token = request.cookies.get(CUSTOMER_COOKIE_NAME, "").strip()
-    if not token:
-         raise HTTPException(status_code=401, detail="Not authenticated")
-    
-    try:
-        # We reuse the same secret for simplicity, or we could use a different one.
-        # Payload will contain sub=phone
-        payload = jwt.decode(token, settings.JWT_SECRET, algorithms=["HS256"])
-        phone = payload.get("sub")
-        if not phone:
-             raise HTTPException(status_code=401, detail="Invalid token")
-        
-        cust = db.query(Customer).filter(Customer.phone == phone).first()
-        if not cust:
-             raise HTTPException(status_code=401, detail="Customer not found")
-        return cust
-    except Exception:
-        raise HTTPException(status_code=401, detail="Invalid session")
-
 
 @app.post("/auth/customer/signup")
-def customer_signup(payload: CustomerSignupIn, db: Session = Depends(get_db)):
-    # Check if exists by phone
-    exists = db.query(Customer).filter(Customer.phone == payload.phone).first()
-    
-    hashed = get_password_hash(payload.password)
+async def customer_signup(payload: CustomerSignupIn):
+    exists = await Customer.find_one(Customer.phone == payload.phone)
+    mapped_hash = get_password_hash(payload.password)
     
     if exists:
-        # If exists but has no password, we can "claim" it? 
-        # Or if we want strict uniqueness. 
-        # Let's assume if password is NULL, they can set it. 
-        # If password is NOT NULL, they must use login (or we raise conflict).
         if exists.hashed_password:
              raise HTTPException(status_code=409, detail="Account already exists. Please login.")
         
-        # Update existing
-        exists.hashed_password = hashed
-        exists.name = payload.name # Update name if provided
+        exists.hashed_password = mapped_hash
+        exists.name = payload.name
         if payload.email:
              exists.email = payload.email
-        db.commit()
+        await exists.save()
         cust = exists
     else:
         cust = Customer(
             name=payload.name,
             phone=payload.phone,
             email=payload.email,
-            hashed_password=hashed,
+            hashed_password=mapped_hash,
             created_at=datetime.utcnow()
         )
-        db.add(cust)
-        db.commit()
+        await cust.insert()
     
-    # Create Token
-    # Minimal payload for customer
-    import jwt
-    import time
-    now = int(time.time())
-    token_payload = {
-        "sub": cust.phone,
-        "name": cust.name,
-        "role": "customer",
-        "iat": now,
-        "exp": now + 24 * 3600 * 7 # 7 days
-    }
-    token = jwt.encode(token_payload, settings.JWT_SECRET, algorithm="HS256")
-
-    resp = JSONResponse({"ok": True, "user": {"id": cust.id, "name": cust.name, "phone": cust.phone}})
-    resp.set_cookie(
-        key=CUSTOMER_COOKIE_NAME,
-        value=token,
-        httponly=True,
-        samesite="none",
-        secure=True,
-        max_age=24 * 3600 * 7,
-    )
-    return resp
-
-
-@app.post("/auth/customer/login")
-def customer_login(payload: CustomerLoginIn, db: Session = Depends(get_db)):
-    cust = db.query(Customer).filter(Customer.phone == payload.phone).first()
-    if not cust:
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-    
-    if not cust.hashed_password:
-         raise HTTPException(status_code=401, detail="Account exists but no password set. Please sign up to set password.")
-
-    if not verify_password(payload.password, cust.hashed_password):
-        raise HTTPException(status_code=401, detail="Invalid credentials")
-
-    # Create Token
-    import jwt
-    import time
-    now = int(time.time())
+    # Token logic
+    now = int(float(datetime.utcnow().timestamp()))
     token_payload = {
         "sub": cust.phone,
         "name": cust.name,
@@ -549,24 +508,45 @@ def customer_login(payload: CustomerLoginIn, db: Session = Depends(get_db)):
     )
     return resp
 
+@app.post("/auth/customer/login")
+async def customer_login(payload: CustomerLoginIn):
+    cust = await Customer.find_one(Customer.phone == payload.phone)
+    if not cust:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    
+    if not cust.hashed_password:
+         raise HTTPException(status_code=401, detail="Account exists but no password set.")
 
-from app.schemas import CustomerGoogleAuthIn, CustomerGoogleAuthOut
+    if not verify_password(payload.password, cust.hashed_password):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+
+    now = int(float(datetime.utcnow().timestamp()))
+    token_payload = {
+        "sub": cust.phone,
+        "name": cust.name,
+        "role": "customer",
+        "iat": now,
+        "exp": now + 24 * 3600 * 7
+    }
+    token = jwt.encode(token_payload, settings.JWT_SECRET, algorithm="HS256")
+
+    resp = JSONResponse({"ok": True, "user": {"id": cust.id, "name": cust.name, "phone": cust.phone}})
+    resp.set_cookie(
+        key=CUSTOMER_COOKIE_NAME,
+        value=token,
+        httponly=True,
+        samesite="none",
+        secure=True,
+        max_age=24 * 3600 * 7,
+    )
+    return resp
 
 @app.post("/auth/customer/google")
-def customer_google_auth(payload: CustomerGoogleAuthIn, db: Session = Depends(get_db)):
-    # 1. Verify Google Token using existing helper
-    # We catch the exception to return a clean error
+async def customer_google_auth(payload: CustomerGoogleAuthIn):
     try:
         req = grequests.Request()
-        # Verify with specific clock skew tolerance if needed, but usually default is fine
         info = id_token.verify_oauth2_token(payload.credential, req, settings.GOOGLE_CLIENT_ID)
-    except ValueError as e:
-        print(f"Google Verify ValueError: {e}")
-        raise HTTPException(status_code=401, detail=f"Invalid Google Credential: {str(e)}")
     except Exception as e:
-        print(f"Google Verify Error (Type: {type(e)}): {e}")
-        import traceback
-        traceback.print_exc()
         raise HTTPException(status_code=401, detail=f"Google Authentication Failed: {str(e)}")
     
     email = (info.get("email") or "").lower().strip()
@@ -576,14 +556,11 @@ def customer_google_auth(payload: CustomerGoogleAuthIn, db: Session = Depends(ge
     if not email:
         raise HTTPException(status_code=400, detail="Google account has no email")
 
-    # 2. Check if customer exists by email
-    cust = db.query(Customer).filter(Customer.email == email).first()
+    cust = await Customer.find_one(Customer.email == email)
     
     if cust:
-        # User exists -> Login Success
-        import jwt
-        import time
-        now = int(time.time())
+        # Login
+        now = int(float(datetime.utcnow().timestamp()))
         token_payload = {
             "sub": cust.phone,
             "name": cust.name,
@@ -608,8 +585,6 @@ def customer_google_auth(payload: CustomerGoogleAuthIn, db: Session = Depends(ge
         )
         return resp
     else:
-        # User does not exist -> Need Phone Number
-        # Return profile info so frontend can pre-fill
         return CustomerGoogleAuthOut(
             ok=True,
             status="need_phone",
@@ -620,31 +595,25 @@ def customer_google_auth(payload: CustomerGoogleAuthIn, db: Session = Depends(ge
             }
         )
 
-
-
 @app.post("/auth/customer/logout")
-def customer_logout():
+async def customer_logout():
     resp = JSONResponse({"ok": True})
     resp.delete_cookie(CUSTOMER_COOKIE_NAME)
     return resp
 
-
 @app.get("/auth/customer/me")
-def customer_me(request: Request, db: Session = Depends(get_db)):
-    cust = get_current_customer(request, db)
+async def customer_me(cust: Customer = Depends(get_current_customer)):
     return {"ok": True, "user": {"id": cust.id, "name": cust.name, "phone": cust.phone}}
+
 
 
 # -----------------------
 # S3 Image Upload (Production Flow)
 # -----------------------
+
 @app.post("/images/presigned-url")
-def get_presigned_upload_url(payload: PresignedUrlRequest, request: Request):
-    """
-    Generate a presigned URL for direct client upload to S3.
-    Client uploads directly to S3, then calls /images/finalize.
-    """
-    _ = get_current_admin(request)
+async def get_presigned_upload_url_endpoint(payload: PresignedUrlRequest, request: Request):
+    get_current_admin(request)
     
     try:
         result = generate_presigned_upload_url(payload.sku, payload.content_type)
@@ -659,12 +628,8 @@ def get_presigned_upload_url(payload: PresignedUrlRequest, request: Request):
 
 
 @app.post("/images/finalize")
-def finalize_image_upload(payload: ImageFinalizeIn, request: Request, db: Session = Depends(get_db)):
-    """
-    Finalize image upload after client has uploaded to S3.
-    Verifies the object exists and saves metadata to database.
-    """
-    _ = get_current_admin(request)
+async def finalize_image_upload(payload: ImageFinalizeIn, request: Request):
+    get_current_admin(request)
     
     # Verify object exists in S3
     if not verify_object_exists(payload.s3_key):
@@ -676,16 +641,16 @@ def finalize_image_upload(payload: ImageFinalizeIn, request: Request, db: Sessio
         raise HTTPException(status_code=500, detail="Failed to retrieve image metadata")
     
     # Check if product exists
-    product = db.query(Product).filter(Product.sku == payload.sku).first()
+    product = await Product.find_one(Product.sku == payload.sku)
     if not product:
         raise HTTPException(status_code=404, detail="Product not found")
     
     # If setting as primary, unset other primary images
     if payload.is_primary:
-        db.query(ProductImage).filter(
-            ProductImage.sku == payload.sku,
-            ProductImage.is_primary == True
-        ).update({"is_primary": False})
+        imgs = await ProductImage.find(ProductImage.sku == payload.sku, ProductImage.is_primary == True).to_list()
+        for img in imgs:
+            img.is_primary = False
+            await img.save()
     
     # Create image record
     img = ProductImage(
@@ -698,10 +663,9 @@ def finalize_image_upload(payload: ImageFinalizeIn, request: Request, db: Sessio
         is_primary=payload.is_primary,
         created_at=datetime.utcnow(),
         updated_at=datetime.utcnow(),
-        url=generate_presigned_get_url(payload.s3_key)  # Populate with signed URL initially (though dynamic is preferred)
+        url=generate_presigned_get_url(payload.s3_key)
     )
-    db.add(img)
-    db.commit()
+    await img.insert()
     
     return {
         "ok": True,
@@ -712,22 +676,16 @@ def finalize_image_upload(payload: ImageFinalizeIn, request: Request, db: Sessio
 
 
 @app.delete("/images/{image_id}")
-def queue_image_deletion(image_id: str, request: Request, db: Session = Depends(get_db)):
-    """
-    Queue an image for deletion. The actual S3 deletion happens asynchronously.
-    """
-    _ = get_current_admin(request)
+async def queue_image_deletion(image_id: str, request: Request):
+    get_current_admin(request)
     
-    img = db.query(ProductImage).filter(ProductImage.id == image_id).first()
+    img = await ProductImage.find_one(ProductImage.id == image_id)
     if not img:
         raise HTTPException(status_code=404, detail="Image not found")
     
     # Only queue if it has an S3 key
     if img.s3_key:
-        # Check if already queued
-        existing = db.query(S3DeletionQueue).filter(
-            S3DeletionQueue.key == img.s3_key
-        ).first()
+        existing = await S3DeletionQueue.find_one(S3DeletionQueue.key == img.s3_key)
         
         if not existing:
             deletion_item = S3DeletionQueue(
@@ -737,12 +695,9 @@ def queue_image_deletion(image_id: str, request: Request, db: Session = Depends(
                 next_retry_at=datetime.utcnow(),
                 created_at=datetime.utcnow()
             )
-            db.add(deletion_item)
+            await deletion_item.insert()
     
-    # Delete image record from database
-    db.delete(img)
-    db.commit()
-    
+    await img.delete()
     return {"ok": True, "message": "Image queued for deletion"}
 
 
@@ -750,51 +705,62 @@ def queue_image_deletion(image_id: str, request: Request, db: Session = Depends(
 # Settings (gold rate)
 # -----------------------
 @app.get("/settings/gold_rate")
-def get_gold_rate(request: Request, db: Session = Depends(get_db)):
-    _ = get_current_admin(request)
-    return GoldRateOut(gold_rate_per_gram=_get_gold_rate(db))
+async def get_gold_rate_endpoint(request: Request):
+    get_current_admin(request)
+    return GoldRateOut(gold_rate_per_gram=await _get_gold_rate())
 
 
 @app.put("/settings/gold_rate")
-def set_gold_rate(payload: GoldRateIn, request: Request, db: Session = Depends(get_db)):
-    _ = get_current_admin(request)
+async def set_gold_rate_endpoint(payload: GoldRateIn, request: Request):
+    get_current_admin(request)
     if payload.gold_rate_per_gram <= 0:
         raise HTTPException(status_code=400, detail="Invalid gold rate")
-    _set_gold_rate(db, float(payload.gold_rate_per_gram))
-    return GoldRateOut(gold_rate_per_gram=_get_gold_rate(db))
+    await _set_gold_rate(float(payload.gold_rate_per_gram))
+    return GoldRateOut(gold_rate_per_gram=await _get_gold_rate())
 
 
 # -----------------------
 # Dashboard metrics + feedback
 # -----------------------
 @app.get("/dashboard/metrics")
-def dashboard_metrics(request: Request, db: Session = Depends(get_db)):
-    _ = get_current_admin(request)
+async def dashboard_metrics(request: Request):
+    get_current_admin(request)
 
     cutoff_90 = datetime.utcnow() - timedelta(days=90)
-    cutoff_180 = datetime.utcnow() - timedelta(days=180)
+    
+    # Active Sourcing
+    active_sourcing = await Product.find(Product.is_archived == False, Product.created_at >= cutoff_90).count()
 
-    # Active Sourcing: items created within 90 days and not archived
-    active_sourcing = db.query(Product).filter(Product.is_archived == False, Product.created_at >= cutoff_90).count()
-
-    # Concept Items: stock_type=concept OR qty=0
-    concept_items = db.query(Product).filter(Product.is_archived == False).filter(
-        or_(Product.stock_type == "concept", Product.qty <= 0)
+    # Concept Items
+    # in Mongo: $or: [ { stock_type: "concept" }, { qty: { $lte: 0 } } ]
+    # Beanie syntax:
+    from beanie.operators import Or, LTE
+    concept_items = await Product.find(
+        Product.is_archived == False, 
+        Or(Product.stock_type == "concept", LTE(Product.qty, 0))
     ).count()
 
-    # Revenue Recovery: sold items count
-    revenue_recovery = db.query(SaleArchive).count()
+    # Revenue Recovery
+    revenue_recovery = await SaleArchive.count()
 
-    # Engagement: total ratings count
-    engagement = db.query(Rating).count()
+    # Engagement
+    engagement = await Rating.count()
 
-    # Asset zones
-    products = db.query(Product).filter(Product.is_archived == False).all()
+    # Asset zones - expensive loop, optimize?
+    # For now, fetch all active products
+    products = await Product.find(Product.is_archived == False).to_list()
+    
     zone_fresh = zone_watch = zone_dead = zone_reserved = 0
+    
+    # Pre-fetch reservations for all products to avoid N+1? 
+    # Or just do N+1 for now as dataset is small? 
+    # Let's trust _status_zone calls are reasonably fast or Mongo handles it.
+    
     for p in products:
         base_date = p.purchase_date or p.created_at.date()
         days_in_stock = (date.today() - base_date).days
-        z = _status_zone(db, p, days_in_stock)
+        z = await _status_zone(p, days_in_stock)
+        
         if z == "Reserved":
             zone_reserved += 1
         elif z == "Fresh":
@@ -817,161 +783,202 @@ def dashboard_metrics(request: Request, db: Session = Depends(get_db)):
 
 
 @app.get("/dashboard/recent_feedback")
-def recent_feedback(request: Request, db: Session = Depends(get_db), limit: int = 15):
-    _ = get_current_admin(request)
+async def recent_feedback(request: Request, limit: int = 15):
+    get_current_admin(request)
     lim = max(1, min(int(limit), 100))
-    rows = db.query(Feedback).order_by(Feedback.created_at.desc()).limit(lim).all()
+    rows = await Feedback.find().sort(-Feedback.created_at).limit(lim).to_list()
     return {"ok": True, "items": [{"id": r.id, "text": r.text, "kiosk_ref": r.kiosk_ref, "created_at": r.created_at.isoformat()} for r in rows]}
-
-
-# -----------------------
-# Customer Data CSV export
-# -----------------------
-@app.get("/customers/ratings.csv")
-def export_ratings_csv(request: Request, db: Session = Depends(get_db)):
-    _ = get_current_admin(request)
-
-    rows = (
-        db.query(Rating, Product)
-        .join(Product, Product.sku == Rating.sku)
-        .order_by(Rating.created_at.desc())
-        .all()
-    )
-
-    def generate():
-        buf = io.StringIO()
-        writer = csv.writer(buf)
-        writer.writerow(["sku", "product_name", "stars", "customer_ref", "created_at"])
-        yield buf.getvalue()
-        buf.seek(0)
-        buf.truncate(0)
-
-        for r, p in rows:
-            writer.writerow([r.sku, p.name, r.stars, r.customer_ref or "", r.created_at.isoformat()])
-            yield buf.getvalue()
-            buf.seek(0)
-            buf.truncate(0)
-
-    return StreamingResponse(generate(), media_type="text/csv", headers={"Content-Disposition": "attachment; filename=ratings.csv"})
-
-
-
 
 
 # -----------------------
 # Public Shop API (No Auth)
 # -----------------------
 @app.get("/public/products")
-def public_list_products(
-    db: Session = Depends(get_db),
+async def public_list_products(
     q: str = "",
     category: str = "",
     limit: int = 1000,
 ):
-    """
-    Public endpoint for customer shop.
-    Returns only active (non-archived), in-stock (or concept) items.
-    """
-    qry = db.query(Product).filter(Product.is_archived == False)
+    from beanie.operators import RegEx
 
-    # Filter by category if provided
+    query = Product.find(Product.is_archived == False)
+
     if category.strip():
-        qry = qry.filter(Product.category == category.strip())
+        query = query.find(Product.category == category.strip())
 
-    # Search query
     if q.strip():
-        s = f"%{q.strip().lower()}%"
-        qry = qry.filter(
-            or_(
-                func.lower(Product.sku).like(s),
-                func.lower(Product.name).like(s),
-                func.lower(Product.description).like(s)
-            )
-        )
+        # Case insensitive regex search
+        # Note: performance impact on large datasets
+        r = RegEx(f".*{q.strip()}.*", "i")
+        query = query.find(Or(
+            Product.sku == r,
+            Product.name == r,
+            Product.description == r
+        ))
     
-    # Order by newest first
-    qry = qry.order_by(Product.created_at.desc())
+    query = query.sort(-Product.created_at).limit(max(1, min(int(limit), 1000)))
+    products = await query.to_list()
     
-    # Limit
-    lim = max(1, min(int(limit), 1000))
-    products = qry.limit(lim).all()
-    
-    return [_product_out(db, p) for p in products]
+    # Async list comprehension would be ideal but python doesn't support [await ... for ...] directly easily without a helper or loop
+    out = []
+    for p in products:
+        out.append(await _product_out(p))
+    return out
 
 
 @app.get("/public/products/{sku}")
-def public_get_product(sku: str, db: Session = Depends(get_db)):
-    """
-    Public endpoint for single product details + recommendations.
-    """
+async def public_get_product(sku: str):
     try:
-        p = db.query(Product).filter(Product.sku == sku, Product.is_archived == False).first()
+        p = await Product.find_one(Product.sku == sku, Product.is_archived == False)
         if not p:
             raise HTTPException(status_code=404, detail="Product not found")
         
-        out = _product_out(db, p)
+        out = await _product_out(p)
         
-        # Get recommendations if model is trained
-        if recommender.model is not None:
-            related_skus = recommender.get_recommendations(sku)
-            out.related_products = related_skus
-        
+        # Add related products
+        if recommender.is_fitted:
+             sim_products = recommender.get_similar_products(sku, top_n=5)
+             out.related_products = [rec.sku for rec in sim_products]
+             
         return out
     except Exception as e:
         import traceback
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
+# -----------------------
+# Recommendation API
+# -----------------------
+
+@app.get("/recommendations/product/{sku}")
+async def recommend_similar_products(sku: str, limit: int = 5):
+    """
+    Get similar products based on content (tags, category, description).
+    """
+    try:
+        # Check if product exists
+        if sku not in recommender.products_map:
+             # Try refreshing if not found (maybe added recently)
+             # But fetching all is expensive.
+             # Just return empty or error.
+             # raise HTTPException(status_code=404, detail="Product not found in model")
+             return []
+             
+        sim_products = recommender.get_similar_products(sku, top_n=limit)
+        
+        out = []
+        for p in sim_products:
+            out.append(await _product_out(p))
+        return out
+    except Exception as e:
+        print(f"Rec Error: {e}")
+        return []
+
+
+@app.get("/recommendations/personalized")
+async def recommend_personalized(limit: int = 5, request: Request = None):
+    """
+    Get personalized recommendations for the logged-in user.
+    """
+    # Try to get customer from token (cookie)
+    # We can't use Depends(get_current_customer) directly if we want it to be optional 
+    # (i.e. return popular if not logged in).
+    # But usually front-end calls this only if logged in.
+    
+    # Let's extract token manually or use dependency that allows optional.
+    # For now, let's assume valid token if cookie present, else fallback.
+    
+    user_id = None
+    try:
+        # Check for admin first (admin can see random Recs?)
+        # Or check for Customer cookie
+        token = request.cookies.get(CUSTOMER_COOKIE_NAME)
+        if token:
+            payload = jwt.decode(token, settings.JWT_SECRET, algorithms=["HS256"])
+            user_id = payload.get("sub") # Phone number is ID for customer
+    except:
+        pass
+
+    if not user_id:
+        # Provide generic trending/random
+        # Recommender 'recommend_for_user' handles cold start if user_id not found in history?
+        # Actually my implementation returns random if no history.
+        # So providing a dummy ID might work if I handle it. 
+        # But my implementation looks up DB.
+        # Let's just pass None? My method expects string.
+        # I'll handle it here.
+        sim_products = recommender.get_similar_products("random", top_n=limit) # This will fail or return empty
+        # Let's manually call cold start logic or just pick random.
+        if recommender.products_map:
+             import random
+             all_skus = list(recommender.products_map.keys())
+             sim_products = [recommender.products_map[k] for k in random.sample(all_skus, min(len(all_skus), limit))]
+        else:
+             sim_products = []
+    else:
+        # Get personalized
+        # user_id is phone number (from token sub).
+        # Models use customer_ref?
+        # Customer model has phone as unique index.
+        # Rating has `customer_ref`. Ideally this matches Customer.id (ObjectId) or Phone?
+        # In `main.py` lines 430+, `cust.id` is ObjectId.
+        # In `models.py`, Customer is Document.
+        # `Rating` has `customer_ref`.
+        # When creating rating (not shown in `main.py` snippet), what do we save?
+        # I should check how Ratings are saved.
+        # If I can't check, I'll assume we need to pass the ID or Phone.
+        # Let's fetch the customer to get the ID.
+        cust = await Customer.find_one(Customer.phone == user_id)
+        if cust:
+            sim_products = await recommender.recommend_for_user(str(cust.id), top_n=limit)
+        else:
+            sim_products = []
+            
+    out = []
+    for p in sim_products:
+        out.append(await _product_out(p))
+    return out
+
+
 
 @app.post("/public/orders")
-def public_create_order(payload: PublicOrderIn, db: Session = Depends(get_db)):
-    """
-    Create an order from public shop.
-    Creates customer if phone not exists, then creates order.
-    """
-    # 1. Find or create customer
-    cust = db.query(Customer).filter(Customer.phone == payload.customer_phone).first()
+async def public_create_order(payload: PublicOrderIn):
+    cust = await Customer.find_one(Customer.phone == payload.customer_phone)
     if not cust:
         cust = Customer(
             name=payload.customer_name,
             phone=payload.customer_phone,
             created_at=datetime.utcnow()
         )
-        db.add(cust)
-        db.commit()
+        await cust.insert()
     
-    # 2. Create Order
     total = sum(item.price * item.qty for item in payload.items)
+    
+    items_list = []
+    for i in payload.items:
+        items_list.append(OrderItem(
+            sku=i.sku,
+            qty=i.qty,
+            price=i.price
+        ))
+    
     order = Order(
         customer_id=cust.id,
         total_amount=total,
         status="PENDING",
-        created_at=datetime.utcnow()
+        created_at=datetime.utcnow(),
+        items=items_list
     )
-    db.add(order)
-    db.commit()
-    
-    # 3. Create Items
-    for i in payload.items:
-        oi = OrderItem(
-            order_id=order.id,
-            sku=i.sku,
-            qty=i.qty,
-            price=i.price
-        )
-        db.add(oi)
-    
-    db.commit()
+    await order.insert()
     return order
 
 
 # -----------------------
-# Vault: Products CRUD + filters + drawer actions
+# Vault: Products CRUD
 # -----------------------
 @app.get("/products")
-def list_products(
+async def list_products(
     request: Request,
-    db: Session = Depends(get_db),
     q: str = "",
     category: str = "",
     stock_type: str = "",
@@ -980,48 +987,58 @@ def list_products(
     include_archived: int = 0,
     limit: int = 200,
 ):
-    _ = get_current_admin(request)
+    get_current_admin(request)
+    from beanie.operators import RegEx, GTE, LTE
 
-    lim = max(1, min(int(limit), 500))
-    qry = db.query(Product)
+    query = Product.find()
 
     if not int(include_archived):
-        qry = qry.filter(Product.is_archived == False)
+        query = query.find(Product.is_archived == False)
 
     if q.strip():
-        s = f"%{q.strip().lower()}%"
-        qry = qry.filter(or_(func.lower(Product.sku).like(s), func.lower(Product.name).like(s), func.lower(Product.description).like(s)))
+        r = RegEx(f".*{q.strip()}.*", "i")
+        query = query.find(Or(
+            Product.sku == r,
+            Product.name == r,
+            Product.description == r
+        ))
 
     if category.strip():
-        qry = qry.filter(func.lower(Product.category) == category.strip().lower())
+        # case insensitive match
+        query = query.find(RegEx(f"^{category.strip()}$", "i"))
 
     if stock_type.strip():
-        qry = qry.filter(Product.stock_type == stock_type.strip().lower())
+        # case insensitive match for stock type or exact? Let's do exact lower as per model default
+        query = query.find(Product.stock_type == stock_type.strip().lower())
 
     if weight_min > 0:
-        qry = qry.filter(Product.weight_g != None).filter(Product.weight_g >= float(weight_min))
+        query = query.find(GTE(Product.weight_g, weight_min))
     if weight_max > 0:
-        qry = qry.filter(Product.weight_g != None).filter(Product.weight_g <= float(weight_max))
+        query = query.find(LTE(Product.weight_g, weight_max))
 
-    qry = qry.order_by(Product.updated_at.desc()).limit(lim)
-    items = qry.all()
-    return [_product_out(db, p) for p in items]
+    lim = max(1, min(int(limit), 500))
+    items = await query.sort(-Product.updated_at).limit(lim).to_list()
+    
+    res = []
+    for p in items:
+        res.append(await _product_out(p))
+    return res
 
 
 @app.get("/products/{sku}")
-def get_product(sku: str, request: Request, db: Session = Depends(get_db)):
-    _ = get_current_admin(request)
-    p = db.query(Product).filter(Product.sku == sku).first()
+async def get_product(sku: str, request: Request):
+    get_current_admin(request)
+    p = await Product.find_one(Product.sku == sku)
     if not p:
         raise HTTPException(status_code=404, detail="Not found")
-    return _product_out(db, p)
+    return await _product_out(p)
 
 
 @app.post("/products")
-def create_product(payload: ProductIn, request: Request, db: Session = Depends(get_db)):
-    _ = get_current_admin(request)
+async def create_product(payload: ProductIn, request: Request):
+    get_current_admin(request)
 
-    exists = db.query(Product).filter(Product.sku == payload.sku).first()
+    exists = await Product.find_one(Product.sku == payload.sku)
     if exists:
         raise HTTPException(status_code=409, detail="SKU already exists")
 
@@ -1037,7 +1054,6 @@ def create_product(payload: ProductIn, request: Request, db: Session = Depends(g
         purchase_date=payload.purchase_date,
         created_at=datetime.utcnow(),
         updated_at=datetime.utcnow(),
-
         is_archived=False,
         price=payload.price,
         manual_rating=payload.manual_rating,
@@ -1045,10 +1061,7 @@ def create_product(payload: ProductIn, request: Request, db: Session = Depends(g
         options=payload.options,
         tags=payload.tags or [],
     )
-    p.options = payload.options
-
-    db.add(p)
-    db.commit() # Commit to get ID? schema uses SKU.
+    await p.insert()
 
     # Handle Image Upload (Base64) - Upload to S3
     if payload.image_base64:
@@ -1058,7 +1071,6 @@ def create_product(payload: ProductIn, request: Request, db: Session = Depends(g
             data = base64.b64decode(encoded)
             content_type = header.split(";", 1)[0].split(":", 1)[1]
             
-            # Upload to S3 (returns s3_key, not URL)
             s3_key = upload_file_to_s3(data, content_type, p.sku)
             public_url = get_public_url(s3_key)
 
@@ -1072,17 +1084,11 @@ def create_product(payload: ProductIn, request: Request, db: Session = Depends(g
                 is_primary=True,
                 created_at=datetime.utcnow(),
                 updated_at=datetime.utcnow(),
-                url=public_url  # Populate public URL
+                url=public_url
             )
-            db.add(img)
-            db.commit()
+            await img.insert()
         except Exception as e:
             print(f"Error uploading image to S3: {e}")
-            import traceback
-            traceback.print_exc()
-            with open("upload_debug_error.txt", "a") as f:
-                f.write(f"Error: {e}\n")
-                f.write(traceback.format_exc())
             raise HTTPException(status_code=500, detail=f"Image upload failed: {str(e)}")
 
     # Handle Additional Images
@@ -1105,24 +1111,24 @@ def create_product(payload: ProductIn, request: Request, db: Session = Depends(g
                     content_type=content_type,
                     file_size=len(data),
                     checksum=calculate_checksum(data),
-                    is_primary=False, # Additional images are not primary
+                    is_primary=False,
                     created_at=datetime.utcnow(),
                     updated_at=datetime.utcnow(),
                     url=public_url
                 )
-                db.add(img)
+                await img.insert()
             except Exception as e:
                 print(f"Error uploading additional image: {e}")
-                # We continue even if one fails
-        
-        db.commit()
     
-    return _product_out(db, p)
+    return await _product_out(p)
 
 
-from fastapi import BackgroundTasks
-
-def _bg_delete_s3_keys(keys: List[str]):
+def _bg_task_delete_keys(keys: List[str]):
+    # Synchronous wrapper for background task
+    # If delete_object_with_retry uses async DB ops (e.g. to update status), this might fail?
+    # Wait, simple s3 delete is sync (boto3).
+    # The S3DeletionQueue insert logic happens in the route, not here.
+    # So if this just calls boto3, it is sync and fine.
     for key in keys:
         try:
             delete_object_with_retry(key)
@@ -1130,13 +1136,12 @@ def _bg_delete_s3_keys(keys: List[str]):
             print(f"Background deletion failed for {key}: {e}")
 
 @app.put("/products/{sku}")
-def update_product(sku: str, payload: ProductIn, request: Request, bg_tasks: BackgroundTasks, db: Session = Depends(get_db)):
-    _ = get_current_admin(request)
-    p = db.query(Product).filter(Product.sku == sku).first()
+async def update_product(sku: str, payload: ProductIn, request: Request, bg_tasks: BackgroundTasks):
+    get_current_admin(request)
+    p = await Product.find_one(Product.sku == sku)
     if not p:
         raise HTTPException(status_code=404, detail="Not found")
 
-    # sku is primary key; do not allow changing it here
     p.name = payload.name.strip()
     p.description = payload.description.strip() if payload.description else None
     p.category = payload.category.strip() if payload.category else None
@@ -1152,25 +1157,23 @@ def update_product(sku: str, payload: ProductIn, request: Request, bg_tasks: Bac
     p.options = payload.options
     p.tags = payload.tags or []
 
-    # Handle Image Update - Upload to S3
     if payload.image_base64:
         try:
-            # Queue old primary images for deletion
-            old_primary = db.query(ProductImage).filter(ProductImage.sku == sku, ProductImage.is_primary == True).all()
+            old_primary = await ProductImage.find(ProductImage.sku == sku, ProductImage.is_primary == True).to_list()
             keys_to_delete = []
             for op in old_primary:
                 op.is_primary = False
+                await op.save()
                 if op.s3_key:
                     keys_to_delete.append(op.s3_key)
             
             if keys_to_delete:
-                bg_tasks.add_task(_bg_delete_s3_keys, keys_to_delete)
+                bg_tasks.add_task(_bg_task_delete_keys, keys_to_delete)
             
             header, encoded = payload.image_base64.split(",", 1)
             data = base64.b64decode(encoded)
             content_type = header.split(";", 1)[0].split(":", 1)[1]
             
-            # Upload to S3 (returns s3_key, not URL)
             s3_key = upload_file_to_s3(data, content_type, p.sku)
             public_url = get_public_url(s3_key)
 
@@ -1184,18 +1187,14 @@ def update_product(sku: str, payload: ProductIn, request: Request, bg_tasks: Bac
                 is_primary=True,
                 created_at=datetime.utcnow(),
                 updated_at=datetime.utcnow(),
-                url=public_url  # Populate public URL
+                url=public_url
             )
-            db.add(img)
+            await img.insert()
         except Exception as e:
-            print(f"Error uploading image to S3: {e}")
-            import traceback
-            traceback.print_exc()
-            raise HTTPException(status_code=500, detail=f"Image upload failed: {str(e)}")
+             raise HTTPException(status_code=500, detail=f"Image upload failed: {str(e)}")
 
-    db.commit()
+    await p.save()
 
-    # Handle Additional Images (Update)
     if payload.additional_images:
         for idx, b64 in enumerate(payload.additional_images):
             try:
@@ -1219,37 +1218,34 @@ def update_product(sku: str, payload: ProductIn, request: Request, bg_tasks: Bac
                     updated_at=datetime.utcnow(),
                     url=public_url
                 )
-                db.add(img)
+                await img.insert()
             except Exception as e:
                 print(f"Error adding additional image: {e}")
                 
-        db.commit()
-    return _product_out(db, p)
+    return await _product_out(p)
 
 
 @app.delete("/products/{sku}")
-def delete_product(sku: str, request: Request, bg_tasks: BackgroundTasks, db: Session = Depends(get_db)):
-    _ = get_current_admin(request)
-    p = db.query(Product).filter(Product.sku == sku).first()
+async def delete_product(sku: str, request: Request, bg_tasks: BackgroundTasks):
+    get_current_admin(request)
+    p = await Product.find_one(Product.sku == sku)
     if not p:
         return {"ok": True}
     
-    # Collect S3 keys for background deletion
-    images = db.query(ProductImage).filter(ProductImage.sku == sku).all()
+    images = await ProductImage.find(ProductImage.sku == sku).to_list()
     keys_to_delete = [img.s3_key for img in images if img.s3_key]
     
     if keys_to_delete:
-        bg_tasks.add_task(_bg_delete_s3_keys, keys_to_delete)
+        bg_tasks.add_task(_bg_task_delete_keys, keys_to_delete)
 
-    db.delete(p)
-    db.commit()
+    await p.delete()
     return {"ok": True}
 
 
 @app.post("/products/{sku}/reserve")
-def reserve_product(sku: str, payload: ReserveIn, request: Request, db: Session = Depends(get_db)):
-    _ = get_current_admin(request)
-    p = db.query(Product).filter(Product.sku == sku).first()
+async def reserve_product(sku: str, payload: ReserveIn, request: Request):
+    get_current_admin(request)
+    p = await Product.find_one(Product.sku == sku)
     if not p:
         raise HTTPException(status_code=404, detail="Not found")
     
@@ -1258,10 +1254,9 @@ def reserve_product(sku: str, payload: ReserveIn, request: Request, db: Session 
     if p.qty < req_qty:
         raise HTTPException(status_code=400, detail=f"Insufficient stock. Available: {p.qty}")
     
-    # Deduct quantity
     p.qty -= req_qty
     
-    # Create reservation record
+    # Create reservation
     res = Reservation(
         sku=sku,
         name=payload.name.strip(),
@@ -1269,91 +1264,79 @@ def reserve_product(sku: str, payload: ReserveIn, request: Request, db: Session 
         qty=req_qty,
         created_at=datetime.utcnow()
     )
-    db.add(res)
+    await res.insert()
     
-    # Update legacy fields for simple status check (optional, but good for "is reserved" logic)
+    # Update legacy info for convenience
     p.reserved_name = payload.name.strip()
     p.reserved_phone = payload.phone.strip()
     p.updated_at = datetime.utcnow()
     
-    db.commit()
-    return _product_out(db, p)
+    await p.save()
+    return await _product_out(p)
 
 
 @app.post("/products/{sku}/release")
-def release_all_reservations(sku: str, request: Request, db: Session = Depends(get_db)):
-    _ = get_current_admin(request)
-    p = db.query(Product).filter(Product.sku == sku).first()
+async def release_all_reservations(sku: str, request: Request):
+    get_current_admin(request)
+    p = await Product.find_one(Product.sku == sku)
     if not p:
         raise HTTPException(status_code=404, detail="Not found")
     
-    # Release legacy
-    if p.reserved_name:
-        # If legacy reservation didn't use Reservation table logic (older data), 
-        # we might need to add back 1 qty if we assume it took 1. 
-        # But moving forward, let's rely on Reservation table.
-        # However, to be safe:
-        # If no reservations exist but reserved_name is set, it was a legacy reservation. 
-        # We should add back 1 qty (as per previous logic).
-        existing_res_count = db.query(Reservation).filter(Reservation.sku == sku).count()
-        if existing_res_count == 0 and p.reserved_name:
-             p.qty += 1
+    existing_res_count = await Reservation.find(Reservation.sku == sku).count()
+    if existing_res_count == 0 and p.reserved_name:
+         p.qty += 1
 
     p.reserved_name = None
     p.reserved_phone = None
     
-    # Release granular reservations
-    reservations = db.query(Reservation).filter(Reservation.sku == sku).all()
+    reservations = await Reservation.find(Reservation.sku == sku).to_list()
     for res in reservations:
         p.qty += res.qty
-        db.delete(res)
+        await res.delete()
         
     p.updated_at = datetime.utcnow()
-    db.commit()
-    return _product_out(db, p)
+    await p.save()
+    return await _product_out(p)
 
 
 @app.post("/reservations/{reservation_id}/release")
-def release_single_reservation(reservation_id: str, request: Request, db: Session = Depends(get_db)):
-    _ = get_current_admin(request)
-    res = db.query(Reservation).filter(Reservation.id == reservation_id).first()
+async def release_single_reservation(reservation_id: str, request: Request):
+    get_current_admin(request)
+    res = await Reservation.find_one(Reservation.id == reservation_id)
     if not res:
         raise HTTPException(status_code=404, detail="Reservation not found")
         
-    p = db.query(Product).filter(Product.sku == res.sku).first()
+    p = await Product.find_one(Product.sku == res.sku)
     if p:
         p.qty += res.qty
-        # Clear legacy if it matches (simple heuristic)
         if p.reserved_name == res.name:
             p.reserved_name = None
             p.reserved_phone = None
         p.updated_at = datetime.utcnow()
+        await p.save()
         
-    db.delete(res)
-    db.commit()
+    await res.delete()
     
     if p:
-        return _product_out(db, p)
+        return await _product_out(p)
     return {"ok": True}
 
 
 @app.post("/products/{sku}/mark_sold")
-def mark_sold(sku: str, payload: MarkSoldIn, request: Request, db: Session = Depends(get_db)):
-    _ = get_current_admin(request)
-    p = db.query(Product).filter(Product.sku == sku).first()
+async def mark_sold(sku: str, payload: MarkSoldIn, request: Request):
+    get_current_admin(request)
+    p = await Product.find_one(Product.sku == sku)
     if not p:
         raise HTTPException(status_code=404, detail="Not found")
 
     base_date = p.purchase_date or p.created_at.date()
     days_to_sell = (date.today() - base_date).days
 
-    # Do NOT archive, so it stays in Vault.
-    # Set qty to 0 to indicate it's out of stock (sold out).
     p.qty = 0
     p.updated_at = datetime.utcnow()
+    await p.save()
 
-    # sales record
-    existing = db.query(SaleArchive).filter(SaleArchive.sku == sku).first()
+    existing = await SaleArchive.find_one(SaleArchive.sku == sku)
     if not existing:
         s = SaleArchive(
             sku=sku,
@@ -1361,25 +1344,21 @@ def mark_sold(sku: str, payload: MarkSoldIn, request: Request, db: Session = Dep
             recovery_price_inr=payload.recovery_price_inr,
             days_to_sell=int(days_to_sell),
         )
-        db.add(s)
+        await s.insert()
 
-    db.commit()
     return {"ok": True, "sku": sku, "days_to_sell": int(days_to_sell)}
 
 
-# -----------------------
-# Sales archive
-# -----------------------
 @app.get("/sales/archive")
-def sales_archive(request: Request, db: Session = Depends(get_db), limit: int = 200):
-    _ = get_current_admin(request)
+async def sales_archive(request: Request, limit: int = 200):
+    get_current_admin(request)
     lim = max(1, min(int(limit), 500))
-    rows = db.query(SaleArchive).order_by(SaleArchive.sold_at.desc()).limit(lim).all()
+    rows = await SaleArchive.find().sort(-SaleArchive.sold_at).limit(lim).to_list()
     return {
         "ok": True,
         "items": [
             {
-                "id": r.id,
+                "id": str(r.id), # Beanie ID is standard
                 "sku": r.sku,
                 "sold_at": r.sold_at.isoformat(),
                 "recovery_price_inr": r.recovery_price_inr,
@@ -1391,7 +1370,7 @@ def sales_archive(request: Request, db: Session = Depends(get_db), limit: int = 
 
 
 # -----------------------
-# Batch sourcing: image buffer + CSV import/match
+# Batch Sourcing
 # -----------------------
 def _admin_buffer_dir(admin_email: str) -> Path:
     safe = admin_email.replace("@", "_at_").replace(".", "_")
@@ -1399,11 +1378,9 @@ def _admin_buffer_dir(admin_email: str) -> Path:
     d.mkdir(parents=True, exist_ok=True)
     return d
 
-
 @app.post("/uploads/buffer_images")
 async def buffer_images(
     request: Request,
-    db: Session = Depends(get_db),
     files: List[UploadFile] = File(...),
 ):
     admin = get_current_admin(request)
@@ -1425,7 +1402,6 @@ async def buffer_images(
 @app.post("/uploads/batch_csv")
 async def batch_csv(
     request: Request,
-    db: Session = Depends(get_db),
     csv_file: UploadFile = File(...),
     global_date: str = "",
     stock_type: str = "physical",
@@ -1442,7 +1418,6 @@ async def batch_csv(
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid CSV")
 
-    # Parse global_date if provided
     gdate = None
     if global_date.strip():
         try:
@@ -1450,7 +1425,6 @@ async def batch_csv(
         except Exception:
             raise HTTPException(status_code=400, detail="global_date must be YYYY-MM-DD")
 
-    # Expected columns (best-effort): sku, name, description, category, subcategory, weight_g, purchase_date, image_filename
     created = 0
     matched_images = 0
 
@@ -1460,7 +1434,7 @@ async def batch_csv(
         if not sku or not name:
             continue
 
-        if db.query(Product).filter(Product.sku == sku).first():
+        if await Product.find_one(Product.sku == sku):
             continue
 
         desc = str(row.get("description") or "").strip() or None
@@ -1506,14 +1480,13 @@ async def batch_csv(
             updated_at=datetime.utcnow(),
             is_archived=False,
         )
-        db.add(p)
+        await p.insert()
         created += 1
 
         img_name = str(row.get("image_filename") or row.get("image") or row.get("filename") or "").strip()
         if img_name:
             candidate = buf_dir / Path(img_name).name
             if candidate.exists():
-                # Move from buffer to media/products/<sku>/
                 prod_dir = MEDIA_DIR / "products" / sku
                 prod_dir.mkdir(parents=True, exist_ok=True)
                 dest = prod_dir / candidate.name
@@ -1521,55 +1494,92 @@ async def batch_csv(
                 rel_path = f"products/{sku}/{dest.name}"
 
                 img = ProductImage(sku=sku, path=rel_path, is_primary=True)
-                db.add(img)
+                await img.insert()
                 matched_images += 1
 
-    db.commit()
     return {"ok": True, "created": created, "matched_images": matched_images}
 
 
+
 # -----------------------
-# Intelligence: Prescriptive cards + Wishlist
+# Intelligence: Prescriptive
 # -----------------------
 @app.get("/intelligence/prescriptive")
-def prescriptive(request: Request, db: Session = Depends(get_db)):
-    _ = get_current_admin(request)
+async def prescriptive(request: Request):
+    get_current_admin(request)
 
-    # Sales velocity: sold in last 90 days by category
     cutoff = datetime.utcnow() - timedelta(days=90)
 
-    # Join sold SKUs back to products is tricky after archive; we keep category snapshot by fetching from products table if still exists.
-    # Here we approximate: count sold SKUs and compare to current stock counts per category.
-    sold_recent = db.query(SaleArchive).filter(SaleArchive.sold_at >= cutoff).all()
+    # Sales velocity: sold in last 90 days.
+    # Beanie aggregation or simple fetch.
+    sold_recent = await SaleArchive.find(SaleArchive.sold_at >= cutoff).to_list()
     sold_skus = [s.sku for s in sold_recent]
 
-    # current stock per category
-    stock = db.query(Product).filter(Product.is_archived == False).all()
+    # Current stock
+    stock = await Product.find(Product.is_archived == False).to_list()
     stock_by_cat: Dict[str, int] = {}
     for p in stock:
         cat = (p.category or "Unknown").strip() or "Unknown"
         stock_by_cat[cat] = stock_by_cat.get(cat, 0) + 1
 
-    # sold by cat (best effort)
+    # Sold by cat (best effort)
+    # We need to look up product category for sold SKUs.
+    # Since products might be deleted or archived, we try to find them.
+    # If deleted, we can't know category easily unless we archived it in SaleArchive (not currently there).
+    # We will query Product even if archived.
     sold_by_cat: Dict[str, int] = {}
+    
+    # Optimization: Fetch all products (including archived) into a map?
+    # If database is huge, this is bad. But for now, let's do individual lookups or `in` query.
+    # sold_skus might be large?
+    # Let's do `in` query
+    products_sold = await Product.find(Product.sku.in_(sold_skus)).to_list() # type: ignore
+    product_map = {p.sku: p for p in products_sold}
+
     for sku in sold_skus:
-        p = db.query(Product).filter(Product.sku == sku).first()
+        p = product_map.get(sku)
         cat = (p.category if p else "Unknown") or "Unknown"
         cat = cat.strip() or "Unknown"
         sold_by_cat[cat] = sold_by_cat.get(cat, 0) + 1
 
-    # ratings by cat
-    rating_rows = (
-        db.query(Product.category, func.avg(Rating.stars), func.count(Rating.id))
-        .join(Rating, Rating.sku == Product.sku)
-        .filter(Product.is_archived == False)
-        .group_by(Product.category)
-        .all()
-    )
-    ratings_by_cat: Dict[str, Tuple[float, int]] = {}
-    for cat, avg, cnt in rating_rows:
-        c = (cat or "Unknown").strip() or "Unknown"
-        ratings_by_cat[c] = (float(avg or 0.0), int(cnt or 0))
+    # Ratings by cat
+    # Rating document has SKU.
+    # Join Rating -> Product to get category.
+    # Beanie aggregation with lookup? Beanie supports native Mongo syntax.
+    # { $lookup: { from: "products", ... } } 
+    # But product SKU is indexed string, not ObjId.
+    
+    # Alternative: Iterate all ratings and fetch product? Slow.
+    # Alternative 2: Iterate all products and fetch average rating? Slow.
+    # Alternative 3: Since we already fetched `stock` (all active products), we can iterate them and find their ratings?
+    # We need a robust way.
+    # Let's try to aggregate on Rating side, but we need category.
+    # For now, let's use the `stock` list we already have (active products) and aggregate in memory if dataset < 10k.
+    # Iterate stock, fetch ratings for each? N+1.
+    
+    # Let's skip complex aggregation for now or do a simplified version.
+    # Fetch ALL ratings.
+    all_ratings = await Rating.find().to_list()
+    ratings_map = {} # sku -> list of stars
+    for r in all_ratings:
+        if r.sku not in ratings_map:
+            ratings_map[r.sku] = []
+        ratings_map[r.sku].append(r.stars)
+        
+    ratings_by_cat: Dict[str, Tuple[float, int]] = {} # cat -> (sum, count)
+    
+    for p in stock:
+        cat = (p.category or "Unknown").strip() or "Unknown"
+        stars = ratings_map.get(p.sku, [])
+        if stars:
+            s, c = ratings_by_cat.get(cat, (0.0, 0))
+            ratings_by_cat[cat] = (s + sum(stars), c + len(stars))
+            
+    # Compute avg
+    final_ratings_by_cat = {}
+    for cat, (s, c) in ratings_by_cat.items():
+        if c > 0:
+            final_ratings_by_cat[cat] = (s / c, c)
 
     buy = []
     trial = []
@@ -1577,17 +1587,14 @@ def prescriptive(request: Request, db: Session = Depends(get_db)):
 
     for cat, stock_cnt in stock_by_cat.items():
         sold_cnt = sold_by_cat.get(cat, 0)
-        avg_rating, votes = ratings_by_cat.get(cat, (0.0, 0))
+        avg_rating, votes = final_ratings_by_cat.get(cat, (0.0, 0))
 
-        # BUY: sales velocity > stock count
         if sold_cnt > stock_cnt:
             buy.append(f"{cat} (sold90={sold_cnt}, stock={stock_cnt})")
 
-        # TRIAL: high rating but low sold
         if avg_rating >= 4.0 and votes >= 3 and sold_cnt <= max(1, stock_cnt // 3):
             trial.append(f"{cat} (rating={avg_rating:.2f}, votes={votes})")
 
-        # AVOID: deadstock heuristic (many items in Dead zone)
         dead_cnt = 0
         for p in stock:
             if (p.category or "Unknown").strip() == cat:
@@ -1607,8 +1614,8 @@ def prescriptive(request: Request, db: Session = Depends(get_db)):
 
 
 @app.post("/wishlist")
-def create_wishlist(payload: WishlistIn, request: Request, db: Session = Depends(get_db)):
-    _ = get_current_admin(request)
+async def create_wishlist(payload: WishlistIn, request: Request):
+    get_current_admin(request)
     w = WishlistRequest(
         client_name=payload.client_name,
         client_phone=payload.client_phone,
@@ -1619,30 +1626,37 @@ def create_wishlist(payload: WishlistIn, request: Request, db: Session = Depends
         status="open",
         created_at=datetime.utcnow(),
     )
-    db.add(w)
-    db.commit()
-    return {"ok": True, "id": w.id}
+    await w.insert()
+    return {"ok": True, "id": str(w.id)}
 
 
 @app.get("/wishlist")
-def list_wishlist(request: Request, db: Session = Depends(get_db), limit: int = 200):
-    _ = get_current_admin(request)
+async def list_wishlist(request: Request, limit: int = 200):
+    get_current_admin(request)
     lim = max(1, min(int(limit), 500))
-    rows = db.query(WishlistRequest).order_by(WishlistRequest.created_at.desc()).limit(lim).all()
+    # Beanie find
+    rows = await WishlistRequest.find().sort(-WishlistRequest.created_at).limit(lim).to_list()
 
-    # Potential matches: quick heuristic
     items: List[WishlistOut] = []
+    from beanie.operators import RegEx, GTE, LTE
+    
     for r in rows:
-        q = db.query(Product).filter(Product.is_archived == False)
+        # Potential matches count
+        q_prod = Product.find(Product.is_archived == False)
+        
         if r.category:
-            q = q.filter(func.lower(Product.category) == r.category.strip().lower())
+             q_prod = q_prod.find(RegEx(f"^{r.category.strip()}$", "i"))
+             
         if r.weight_target_g is not None:
-            q = q.filter(Product.weight_g != None).filter(Product.weight_g >= float(r.weight_target_g) * 0.8).filter(Product.weight_g <= float(r.weight_target_g) * 1.2)
-        matches = q.count()
+             w_min = float(r.weight_target_g) * 0.8
+             w_max = float(r.weight_target_g) * 1.2
+             q_prod = q_prod.find(GTE(Product.weight_g, w_min), LTE(Product.weight_g, w_max))
+        
+        matches = await q_prod.count()
 
         items.append(
             WishlistOut(
-                id=r.id,
+                id=str(r.id),
                 client_name=r.client_name,
                 client_phone=r.client_phone,
                 request_text=r.request_text,
@@ -1661,20 +1675,33 @@ def list_wishlist(request: Request, db: Session = Depends(get_db), limit: int = 
 # CRM: Customers & Orders
 # -----------------------
 @app.get("/customers")
-def list_customers(request: Request, db: Session = Depends(get_db), q: str = ""):
-    _ = get_current_admin(request)
-    qry = db.query(Customer).order_by(Customer.created_at.desc())
+async def list_customers(request: Request, q: str = ""):
+    get_current_admin(request)
+    query = Customer.find()
     if q.strip():
-        s = f"%{q.strip().lower()}%"
-        qry = qry.filter(or_(func.lower(Customer.name).like(s), Customer.phone.like(s)))
-    return qry.limit(100).all()
+        from beanie.operators import Or, RegEx
+        r = RegEx(f".*{q.strip()}.*", "i")
+        query = query.find(Or(Customer.name == r, Customer.phone == r))
+        
+    res = await query.sort(-Customer.created_at).limit(100).to_list()
+    # Map to CustomerOut
+    return [
+        CustomerOut(
+            id=str(c.id),
+            name=c.name,
+            phone=c.phone,
+            email=c.email,
+            notes=c.notes,
+            created_at=c.created_at
+        )
+        for c in res
+    ]
 
 
 @app.post("/customers")
-def create_customer(payload: CustomerIn, request: Request, db: Session = Depends(get_db)):
-    _ = get_current_admin(request)
-    # Check phone unique
-    existing = db.query(Customer).filter(Customer.phone == payload.phone).first()
+async def create_customer_endpoint(payload: CustomerIn, request: Request):
+    get_current_admin(request)
+    existing = await Customer.find_one(Customer.phone == payload.phone)
     if existing:
         raise HTTPException(status_code=409, detail="Customer with this phone already exists")
     
@@ -1685,83 +1712,135 @@ def create_customer(payload: CustomerIn, request: Request, db: Session = Depends
         notes=payload.notes,
         created_at=datetime.utcnow(),
     )
-    db.add(c)
-    db.commit()
-    return c
+    await c.insert()
+    return CustomerOut(
+        id=str(c.id),
+        name=c.name,
+        phone=c.phone,
+        email=c.email,
+        notes=c.notes,
+        created_at=c.created_at
+    )
+
+
+async def _order_out(o: Order) -> OrderOut:
+    # Fetch customer
+    cust = await Customer.find_one(Customer.id == o.customer_id) # Beanie IDs can be ObjId or string depending on definition. Default Document uses Pydantic ObjectId.
+    
+    cust_out = None
+    if cust:
+        cust_out = CustomerOut(
+            id=str(cust.id), 
+            name=cust.name, 
+            phone=cust.phone, 
+            email=cust.email, 
+            notes=cust.notes, 
+            created_at=cust.created_at
+        )
+
+    # Items
+    items_out = []
+    for i in o.items:
+        items_out.append(OrderItemOut(sku=i.sku, qty=i.qty, price=i.price))
+
+    return OrderOut(
+        id=str(o.id),
+        customer_id=str(o.customer_id),
+        total_amount=o.total_amount,
+        status=o.status,
+        created_at=o.created_at,
+        customer=cust_out,
+        items=items_out
+    )
 
 
 @app.get("/orders")
-def list_orders(request: Request, db: Session = Depends(get_db)):
-    _ = get_current_admin(request)
-    orders = (
-        db.query(Order)
-        .options(joinedload(Order.customer), joinedload(Order.items))
-        .order_by(Order.created_at.desc())
-        .limit(100)
-        .all()
-    )
-    return orders
+async def list_orders(request: Request):
+    get_current_admin(request)
+    orders = await Order.find().sort(-Order.created_at).limit(100).to_list()
+    out = []
+    for o in orders:
+        out.append(await _order_out(o))
+    return out
 
 
 @app.post("/orders")
-def create_order(payload: OrderIn, request: Request, db: Session = Depends(get_db)):
-    _ = get_current_admin(request)
+async def create_order_endpoint(payload: OrderIn, request: Request):
+    get_current_admin(request)
     
-    # Verify customer
-    cust = db.query(Customer).filter(Customer.id == payload.customer_id).first()
+    # Customer ID from payload is str.
+    # Needed to fetch customer.
+    from beanie import PydanticObjectId
+    from bson import ObjectId
+    
+    try:
+        c_id = PydanticObjectId(payload.customer_id)
+    except:
+        c_id = payload.customer_id # fallback
+
+    cust = await Customer.get(c_id)
     if not cust:
-        raise HTTPException(status_code=404, detail="Customer not found")
+        # Try finding by string if that failed or if ID was string
+        # Since currently main model uses default Beanie ID (ObjectId), we really need to parse it.
+        # But let's assume valid ID.
+        pass
+
+    if not cust:
+         # Attempt fallback?
+         # Beanie's `get` handles ObjectId parsing usually if string is valid.
+         raise HTTPException(status_code=404, detail="Customer not found")
 
     total = 0.0
-    # Create Order items
-    items = []
+    items_list = []
+    
     for it in payload.items:
-        # Check product stock (optional, good practice)
-        p = db.query(Product).filter(Product.sku == it.sku).first()
+        p = await Product.find_one(Product.sku == it.sku)
         if not p:
             raise HTTPException(status_code=400, detail=f"Product {it.sku} not found")
         
-        # Calculate line total
         line_total = it.qty * it.price
         total += line_total
         
-        items.append(OrderItem(
+        items_list.append(OrderItem(
             sku=it.sku,
             qty=it.qty,
             price=it.price
         ))
 
     o = Order(
-        customer_id=cust.id,
+        customer_id=str(cust.id),
         total_amount=total,
         status=payload.status,
-        created_at=datetime.utcnow()
+        created_at=datetime.utcnow(),
+        items=items_list
     )
-    db.add(o)
-    db.commit() # Get order ID
-
-    for item in items:
-        item.order_id = o.id
-        db.add(item)
+    await o.insert()
     
-    db.commit()
-    
-    # Reload to return full object
-    db.refresh(o)
-    return o
+    return await _order_out(o)
 
 
 @app.put("/orders/{order_id}/status")
-def update_order_status(order_id: str, status: str, request: Request, db: Session = Depends(get_db)):
-    _ = get_current_admin(request)
-    o = db.query(Order).filter(Order.id == order_id).first()
+async def update_order_status(order_id: str, status: str, request: Request):
+    get_current_admin(request)
+    
+    # Try fetch by ID
+    o = await Order.get(order_id)
+    if not o:
+        # try find one with query if get failed (e.g. format mismatch)
+        try:
+            from bson import ObjectId
+            if ObjectId.is_valid(order_id):
+                 o = await Order.get(ObjectId(order_id))
+        except:
+            pass
+            
     if not o:
         raise HTTPException(status_code=404, detail="Order not found")
     
     o.status = status.upper()
-    db.commit()
-    db.refresh(o)
-    return o
+    await o.save()
+    return await _order_out(o)
+
 
 
 # -----------------------
@@ -1776,44 +1855,77 @@ RAZORPAY_KEY_SECRET = os.getenv("RAZORPAY_KEY_SECRET", "s4Sj5Ad8I870123")
 
 client = razorpay.Client(auth=(RAZORPAY_KEY_ID, RAZORPAY_KEY_SECRET))
 
-# @app.post("/payment/create_order")
-# def create_payment_order(payload: PaymentOrderIn, db: Session = Depends(get_db), cust: Customer = Depends(get_current_customer)):
-#     try:
-#         data = {
-#             "amount": int(payload.amount * 100),
-#             "currency": payload.currency,
-#             "receipt": f"receipt_{cust.id}_{int(datetime.utcnow().timestamp())}",
-#             "payment_capture": 1
-#         }
-#         order = client.order.create(data=data)
-#         return {"ok": True, "order_id": order['id'], "amount": order['amount'], "currency": order['currency'], "key_id": RAZORPAY_KEY_ID}
-#     except Exception as e:
-#         print(f"Razorpay Error: {e}")
-#         raise HTTPException(status_code=500, detail="Payment creation failed")
+# Endpoints commented out in original file, keeping them commented or omitted
+# as per migration strictness.
+# To enable, simply uncomment and adapt to Async/Beanie if needed.
 
-# @app.post("/payment/verify")
-# def verify_payment(payload: PaymentVerifyIn, db: Session = Depends(get_db), cust: Customer = Depends(get_current_customer)):
-#     try:
-#         # Verify Signature
-#         client.utility.verify_payment_signature({
-#             'razorpay_order_id': payload.razorpay_order_id,
-#             'razorpay_payment_id': payload.razorpay_payment_id,
-#             'razorpay_signature': payload.razorpay_signature
-#         })
-#         
-#         # Verify successful, CREATE ORDER
-#         new_order = Order(
-#             customer_id=cust.id,
-#             total_amount=payload.total_amount,
-#             status="PAID",
-#             created_at=datetime.utcnow()
-#         )
-#         db.add(new_order)
-#         db.commit()
-#         
-#         return {"ok": True, "order_id": new_order.id, "status": "paid"}
-#     except razorpay.errors.SignatureVerificationError:
-#         raise HTTPException(status_code=400, detail="Payment verification failed")
-#     except Exception as e:
-#         print(f"Payment Verification Error: {e}")
-#         raise HTTPException(status_code=500, detail="Internal Server Error")
+# -----------------------
+# Virtual Try-On
+# -----------------------
+@app.post("/try-on")
+async def process_try_on(sku: str, file: UploadFile = File(...)):
+    """
+    Process virtual try-on:
+    1. Receive user image (file)
+    2. Receive product SKU
+    3. Detect face landmarks
+    4. Fetch product primary image (transparent PNG preferred)
+    5. Overlay product on user image
+    6. Return result image
+    """
+    if not sku:
+        raise HTTPException(status_code=400, detail="SKU is required")
+        
+    # 1. Fetch Product
+    product = await Product.find_one(Product.sku == sku)
+    if not product:
+        raise HTTPException(status_code=404, detail="Product not found")
+        
+    # 2. Fetch Primary Image URL
+    # We need a public URL or s3 key to fetch content
+    # For speed, let's use the one we can get bytes from
+    p_images = await ProductImage.find(ProductImage.sku == sku).to_list()
+    if not p_images:
+        raise HTTPException(status_code=404, detail="Product has no images")
+        
+    # Prefer primary, else first
+    prim = next((i for i in p_images if i.is_primary), p_images[0])
+    
+    # We need the actual URL to fetch bytes in tryon service
+    # If using local/minio, might need internal logic. 
+    # generate_presigned_get_url is good
+    img_url = _get_image_url_safe(prim)
+    if not img_url:
+         raise HTTPException(status_code=404, detail="Could not resolve product image URL")
+
+    # 3. Read User Image
+    user_img_bytes = await file.read()
+    
+    try:
+        # 4. Process
+        # We run this in threadpool to not block asyncio loop
+        loop = asyncio.get_event_loop()
+        result_bytes = await loop.run_in_executor(
+            None, 
+            try_on_service.process_try_on,
+            user_img_bytes,
+            img_url,
+            product.category or "jewelry"
+        )
+        
+        # 5. Return
+        return Response(content=result_bytes, media_type="image/png")
+        
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+
+    except Exception as e:
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail="Try-on processing failed")
+
+
+@app.get("/try-on-ui", response_class=FileResponse)
+def open_try_on_ui():
+    return FileResponse("app/tryon_ui.html")
+

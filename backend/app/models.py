@@ -1,218 +1,180 @@
 from __future__ import annotations
 
-import uuid
+from typing import Optional, List, Dict
 from datetime import datetime, date
-from typing import Optional
+import uuid
 
-from sqlalchemy import (
-    Boolean,
-    Date,
-    DateTime,
-    Float,
-    ForeignKey,
-    Integer,
-    String,
-    Text,
-    UniqueConstraint,
-    JSON,
-    LargeBinary,
-)
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
-
+from beanie import Document, Indexed
+from pydantic import Field, BaseModel
 
 def _uuid() -> str:
     return uuid.uuid4().hex
 
+class Setting(Document):
+    key: Indexed(str, unique=True)
+    value: str
 
-class Base(DeclarativeBase):
-    pass
+    class Settings:
+        name = "settings"
 
-
-class Setting(Base):
-    __tablename__ = "settings"
-    key: Mapped[str] = mapped_column(String(120), primary_key=True)
-    value: Mapped[str] = mapped_column(String(500), nullable=False)
-
-
-class Product(Base):
-    __tablename__ = "products"
-
-    sku: Mapped[str] = mapped_column(String(120), primary_key=True)
-    name: Mapped[str] = mapped_column(String(240), nullable=False)
-    description: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-
-    category: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
-    subcategory: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
-
-    weight_g: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-
-    # stock_type: "physical" or "concept"
-    stock_type: Mapped[str] = mapped_column(String(20), nullable=False, default="physical")
-    qty: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
-
-    purchase_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
-
-    # reservation
-    reserved_name: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
-    reserved_phone: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
-
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
-
-    is_archived: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-
-    price: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    manual_rating: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    terms: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    options: Mapped[Optional[dict]] = mapped_column(JSON, nullable=True)
-    tags: Mapped[Optional[list]] = mapped_column(JSON, nullable=True)
-
-    images = relationship("ProductImage", back_populates="product", cascade="all, delete-orphan")
-    ratings = relationship("Rating", back_populates="product", cascade="all, delete-orphan")
-    reservations = relationship("Reservation", back_populates="product", cascade="all, delete-orphan")
-
-
-class ProductImage(Base):
-    __tablename__ = "product_images"
-    id: Mapped[str] = mapped_column(String(40), primary_key=True, default=_uuid)
-    sku: Mapped[str] = mapped_column(String(120), ForeignKey("products.sku"), nullable=False)
+class ProductImage(Document):
+    # Independent document to allow fetching by ID easily
+    id: str = Field(default_factory=_uuid)
+    sku: Indexed(str) # Reference to Product SKU
     
-    # Legacy fields (for backward compatibility)
-    path: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
-    image_data: Mapped[Optional[bytes]] = mapped_column(LargeBinary, nullable=True)
-    url: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)  # Old full URL
+    # Legacy fields
+    path: Optional[str] = None
+    image_data: Optional[bytes] = None
+    url: Optional[str] = None
     
-    # New S3 fields (production-ready)
-    s3_key: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)  # Immutable S3 object key
-    upload_status: Mapped[str] = mapped_column(String(20), nullable=False, default="ACTIVE")  # PENDING|ACTIVE|FAILED
+    # New S3 fields
+    s3_key: Optional[str] = None
+    upload_status: str = "ACTIVE"
     
-    # Metadata
-    content_type: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
-    file_size: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)  # bytes
-    checksum: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)  # SHA256
+    content_type: Optional[str] = None
+    file_size: Optional[int] = None
+    checksum: Optional[str] = None
     
-    is_primary: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    is_primary: bool = False
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+    class Settings:
+        name = "product_images"
+
+class Reservation(Document):
+    id: str = Field(default_factory=_uuid)
+    sku: Indexed(str)
+    name: str
+    phone: Optional[str] = None
+    qty: int = 1
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+    class Settings:
+        name = "reservations"
+
+class Rating(Document):
+    id: str = Field(default_factory=_uuid)
+    sku: Indexed(str)
+    stars: int # 1..5
+    customer_ref: Optional[str] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+    class Settings:
+        name = "ratings"
+
+class Product(Document):
+    sku: Indexed(str, unique=True)
+    name: str
+    description: Optional[str] = None
+
+    category: Optional[str] = None
+    subcategory: Optional[str] = None
+
+    weight_g: Optional[float] = None
+
+    stock_type: str = "physical"
+    qty: int = 1
+
+    purchase_date: Optional[date] = None
+
+    # reservation (legacy)
+    reserved_name: Optional[str] = None
+    reserved_phone: Optional[str] = None
+
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    updated_at: datetime = Field(default_factory=datetime.utcnow)
+
+    is_archived: bool = False
+
+    price: Optional[float] = None
+    manual_rating: Optional[float] = None
+    terms: Optional[str] = None
+    options: Optional[Dict] = None
+    tags: Optional[List[str]] = None
+
+    class Settings:
+        name = "products"
+
+class S3DeletionQueue(Document):
+    bucket: str
+    key: Indexed(str, unique=True)
     
-    product = relationship("Product", back_populates="images")
-
-
-class S3DeletionQueue(Base):
-    """Queue for safe async deletion of S3 objects."""
-    __tablename__ = "s3_deletion_queue"
+    attempts: int = 0
+    max_attempts: int = 5
+    next_retry_at: datetime = Field(default_factory=datetime.utcnow)
     
-    id: Mapped[str] = mapped_column(String(40), primary_key=True, default=_uuid)
-    bucket: Mapped[str] = mapped_column(String(255), nullable=False)
-    key: Mapped[str] = mapped_column(String(500), nullable=False)
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+    last_error: Optional[str] = None
+
+    class Settings:
+        name = "s3_deletion_queue"
+
+class Feedback(Document):
+    text: str
+    kiosk_ref: Optional[str] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+    class Settings:
+        name = "feedback"
+
+class WishlistRequest(Document):
+    client_name: Optional[str] = None
+    client_phone: Optional[str] = None
+    request_text: str
+    category: Optional[str] = None
+    weight_target_g: Optional[float] = None
+    budget_inr: Optional[float] = None
+    status: str = "open"
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+    class Settings:
+        name = "wishlist_requests"
+
+class SaleArchive(Document):
+    sku: Indexed(str, unique=True)
+    sold_at: datetime = Field(default_factory=datetime.utcnow)
+    recovery_price_inr: Optional[float] = None
+    days_to_sell: Optional[int] = None
+
+    class Settings:
+        name = "sales_archive"
+
+class Customer(Document):
+    name: str
+    phone: Indexed(str, unique=True)
+    email: Optional[str] = None
+    hashed_password: Optional[str] = None
+    notes: Optional[str] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
     
-    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    max_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
-    next_retry_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    class Settings:
+        name = "customers"
+
+class OrderItem(BaseModel):
+    # Embedded in Order is better for consistency
+    id: str = Field(default_factory=_uuid)
+    sku: str
+    qty: int = 1
+    price: float = 0.0
+
+class Order(Document):
+    customer_id: Indexed(str)
+    total_amount: float = 0.0
+    status: str = "PENDING"
+    created_at: datetime = Field(default_factory=datetime.utcnow)
     
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
-    last_error: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    
-    __table_args__ = (
-        UniqueConstraint("bucket", "key", name="uniq_deletion_bucket_key"),
-    )
+    items: List[OrderItem] = []
 
-class Rating(Base):
-    __tablename__ = "ratings"
-    id: Mapped[str] = mapped_column(String(40), primary_key=True, default=_uuid)
-    sku: Mapped[str] = mapped_column(String(120), ForeignKey("products.sku"), nullable=False)
-    stars: Mapped[int] = mapped_column(Integer, nullable=False)  # 1..5
-    customer_ref: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    class Settings:
+        name = "orders"
 
-    product = relationship("Product", back_populates="ratings")
+class AdminAccount(Document):
+    email: Indexed(str, unique=True)
+    hashed_password: str
+    name: Optional[str] = None
+    picture: Optional[str] = None
+    created_at: datetime = Field(default_factory=datetime.utcnow)
 
-
-class Feedback(Base):
-    __tablename__ = "feedback"
-    id: Mapped[str] = mapped_column(String(40), primary_key=True, default=_uuid)
-    text: Mapped[str] = mapped_column(Text, nullable=False)
-    kiosk_ref: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
-
-
-class WishlistRequest(Base):
-    __tablename__ = "wishlist_requests"
-    id: Mapped[str] = mapped_column(String(40), primary_key=True, default=_uuid)
-    client_name: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
-    client_phone: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
-    request_text: Mapped[str] = mapped_column(Text, nullable=False)
-    category: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
-    weight_target_g: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    budget_inr: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    status: Mapped[str] = mapped_column(String(20), nullable=False, default="open")  # open/fulfilled/closed
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
-
-
-class SaleArchive(Base):
-    __tablename__ = "sales_archive"
-    id: Mapped[str] = mapped_column(String(40), primary_key=True, default=_uuid)
-    sku: Mapped[str] = mapped_column(String(120), nullable=False)
-    sold_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
-    recovery_price_inr: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
-    days_to_sell: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
-
-    __table_args__ = (UniqueConstraint("sku", name="uniq_sale_sku"),)
-
-
-class Customer(Base):
-    __tablename__ = "customers"
-    id: Mapped[str] = mapped_column(String(40), primary_key=True, default=_uuid)
-    name: Mapped[str] = mapped_column(String(120), nullable=False)
-    phone: Mapped[str] = mapped_column(String(40), nullable=False)
-    email: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
-    hashed_password: Mapped[Optional[str]] = mapped_column(String(255), nullable=True)
-    notes: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
-
-    __table_args__ = (UniqueConstraint("phone", name="uniq_customer_phone"),)
-    orders = relationship("Order", back_populates="customer")
-
-
-class Order(Base):
-    __tablename__ = "orders"
-    id: Mapped[str] = mapped_column(String(40), primary_key=True, default=_uuid)
-    customer_id: Mapped[str] = mapped_column(String(40), ForeignKey("customers.id"), nullable=False)
-    total_amount: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
-    status: Mapped[str] = mapped_column(String(20), nullable=False, default="PENDING")  # PENDING, COMPLETED, CANCELLED
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
-
-    customer = relationship("Customer", back_populates="orders")
-    items = relationship("OrderItem", back_populates="order", cascade="all, delete-orphan")
-
-
-class OrderItem(Base):
-    __tablename__ = "order_items"
-    id: Mapped[str] = mapped_column(String(40), primary_key=True, default=_uuid)
-    order_id: Mapped[str] = mapped_column(String(40), ForeignKey("orders.id"), nullable=False)
-    sku: Mapped[str] = mapped_column(String(120), ForeignKey("products.sku"), nullable=False)
-    qty: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
-    price: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
-
-    order = relationship("Order", back_populates="items")
-
-
-class AdminAccount(Base):
-    __tablename__ = "admin_accounts"
-    email: Mapped[str] = mapped_column(String(120), primary_key=True)
-    hashed_password: Mapped[str] = mapped_column(String(255), nullable=False)
-    name: Mapped[Optional[str]] = mapped_column(String(120), nullable=True)
-    picture: Mapped[Optional[str]] = mapped_column(String(500), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
-
-
-class Reservation(Base):
-    __tablename__ = "reservations"
-    id: Mapped[str] = mapped_column(String(40), primary_key=True, default=_uuid)
-    sku: Mapped[str] = mapped_column(String(120), ForeignKey("products.sku"), nullable=False)
-    name: Mapped[str] = mapped_column(String(120), nullable=False)
-    phone: Mapped[Optional[str]] = mapped_column(String(40), nullable=True)
-    qty: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
-    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
-
-    product = relationship("Product", back_populates="reservations")
+    class Settings:
+        name = "admin_accounts"

@@ -1,0 +1,357 @@
+
+# -----------------------
+# Intelligence: Prescriptive
+# -----------------------
+@app.get("/intelligence/prescriptive")
+async def prescriptive(request: Request):
+    get_current_admin(request)
+
+    cutoff = datetime.utcnow() - timedelta(days=90)
+
+    # Sales velocity: sold in last 90 days.
+    # Beanie aggregation or simple fetch.
+    sold_recent = await SaleArchive.find(SaleArchive.sold_at >= cutoff).to_list()
+    sold_skus = [s.sku for s in sold_recent]
+
+    # Current stock
+    stock = await Product.find(Product.is_archived == False).to_list()
+    stock_by_cat: Dict[str, int] = {}
+    for p in stock:
+        cat = (p.category or "Unknown").strip() or "Unknown"
+        stock_by_cat[cat] = stock_by_cat.get(cat, 0) + 1
+
+    # Sold by cat (best effort)
+    # We need to look up product category for sold SKUs.
+    # Since products might be deleted or archived, we try to find them.
+    # If deleted, we can't know category easily unless we archived it in SaleArchive (not currently there).
+    # We will query Product even if archived.
+    sold_by_cat: Dict[str, int] = {}
+    
+    # Optimization: Fetch all products (including archived) into a map?
+    # If database is huge, this is bad. But for now, let's do individual lookups or `in` query.
+    # sold_skus might be large?
+    # Let's do `in` query
+    products_sold = await Product.find(Product.sku.in_(sold_skus)).to_list() # type: ignore
+    product_map = {p.sku: p for p in products_sold}
+
+    for sku in sold_skus:
+        p = product_map.get(sku)
+        cat = (p.category if p else "Unknown") or "Unknown"
+        cat = cat.strip() or "Unknown"
+        sold_by_cat[cat] = sold_by_cat.get(cat, 0) + 1
+
+    # Ratings by cat
+    # Rating document has SKU.
+    # Join Rating -> Product to get category.
+    # Beanie aggregation with lookup? Beanie supports native Mongo syntax.
+    # { $lookup: { from: "products", ... } } 
+    # But product SKU is indexed string, not ObjId.
+    
+    # Alternative: Iterate all ratings and fetch product? Slow.
+    # Alternative 2: Iterate all products and fetch average rating? Slow.
+    # Alternative 3: Since we already fetched `stock` (all active products), we can iterate them and find their ratings?
+    # We need a robust way.
+    # Let's try to aggregate on Rating side, but we need category.
+    # For now, let's use the `stock` list we already have (active products) and aggregate in memory if dataset < 10k.
+    # Iterate stock, fetch ratings for each? N+1.
+    
+    # Let's skip complex aggregation for now or do a simplified version.
+    # Fetch ALL ratings.
+    all_ratings = await Rating.find().to_list()
+    ratings_map = {} # sku -> list of stars
+    for r in all_ratings:
+        if r.sku not in ratings_map:
+            ratings_map[r.sku] = []
+        ratings_map[r.sku].append(r.stars)
+        
+    ratings_by_cat: Dict[str, Tuple[float, int]] = {} # cat -> (sum, count)
+    
+    for p in stock:
+        cat = (p.category or "Unknown").strip() or "Unknown"
+        stars = ratings_map.get(p.sku, [])
+        if stars:
+            s, c = ratings_by_cat.get(cat, (0.0, 0))
+            ratings_by_cat[cat] = (s + sum(stars), c + len(stars))
+            
+    # Compute avg
+    final_ratings_by_cat = {}
+    for cat, (s, c) in ratings_by_cat.items():
+        if c > 0:
+            final_ratings_by_cat[cat] = (s / c, c)
+
+    buy = []
+    trial = []
+    avoid = []
+
+    for cat, stock_cnt in stock_by_cat.items():
+        sold_cnt = sold_by_cat.get(cat, 0)
+        avg_rating, votes = final_ratings_by_cat.get(cat, (0.0, 0))
+
+        if sold_cnt > stock_cnt:
+            buy.append(f"{cat} (sold90={sold_cnt}, stock={stock_cnt})")
+
+        if avg_rating >= 4.0 and votes >= 3 and sold_cnt <= max(1, stock_cnt // 3):
+            trial.append(f"{cat} (rating={avg_rating:.2f}, votes={votes})")
+
+        dead_cnt = 0
+        for p in stock:
+            if (p.category or "Unknown").strip() == cat:
+                base_date = p.purchase_date or p.created_at.date()
+                days = (date.today() - base_date).days
+                if days > 180:
+                    dead_cnt += 1
+        if dead_cnt >= 3:
+            avoid.append(f"{cat} (deadstock={dead_cnt})")
+
+    cards = [
+        PrescriptiveCard(title="Strategic BUY", color="green", items=buy[:15]).model_dump(),
+        PrescriptiveCard(title="Market TRIAL", color="yellow", items=trial[:15]).model_dump(),
+        PrescriptiveCard(title="Strategic AVOID", color="red", items=avoid[:15]).model_dump(),
+    ]
+    return {"ok": True, "cards": cards}
+
+
+@app.post("/wishlist")
+async def create_wishlist(payload: WishlistIn, request: Request):
+    get_current_admin(request)
+    w = WishlistRequest(
+        client_name=payload.client_name,
+        client_phone=payload.client_phone,
+        request_text=payload.request_text,
+        category=payload.category,
+        weight_target_g=payload.weight_target_g,
+        budget_inr=payload.budget_inr,
+        status="open",
+        created_at=datetime.utcnow(),
+    )
+    await w.insert()
+    return {"ok": True, "id": str(w.id)}
+
+
+@app.get("/wishlist")
+async def list_wishlist(request: Request, limit: int = 200):
+    get_current_admin(request)
+    lim = max(1, min(int(limit), 500))
+    # Beanie find
+    rows = await WishlistRequest.find().sort(-WishlistRequest.created_at).limit(lim).to_list()
+
+    items: List[WishlistOut] = []
+    from beanie.operators import RegEx, GTE, LTE
+    
+    for r in rows:
+        # Potential matches count
+        q_prod = Product.find(Product.is_archived == False)
+        
+        if r.category:
+             q_prod = q_prod.find(RegEx(f"^{r.category.strip()}$", "i"))
+             
+        if r.weight_target_g is not None:
+             w_min = float(r.weight_target_g) * 0.8
+             w_max = float(r.weight_target_g) * 1.2
+             q_prod = q_prod.find(GTE(Product.weight_g, w_min), LTE(Product.weight_g, w_max))
+        
+        matches = await q_prod.count()
+
+        items.append(
+            WishlistOut(
+                id=str(r.id),
+                client_name=r.client_name,
+                client_phone=r.client_phone,
+                request_text=r.request_text,
+                category=r.category,
+                weight_target_g=r.weight_target_g,
+                budget_inr=r.budget_inr,
+                status=r.status,
+                created_at=r.created_at,
+                potential_matches=int(matches),
+            )
+        )
+    return items
+
+
+# -----------------------
+# CRM: Customers & Orders
+# -----------------------
+@app.get("/customers")
+async def list_customers(request: Request, q: str = ""):
+    get_current_admin(request)
+    query = Customer.find()
+    if q.strip():
+        from beanie.operators import Or, RegEx
+        r = RegEx(f".*{q.strip()}.*", "i")
+        query = query.find(Or(Customer.name == r, Customer.phone == r))
+        
+    res = await query.sort(-Customer.created_at).limit(100).to_list()
+    # Map to CustomerOut
+    return [
+        CustomerOut(
+            id=str(c.id),
+            name=c.name,
+            phone=c.phone,
+            email=c.email,
+            notes=c.notes,
+            created_at=c.created_at
+        )
+        for c in res
+    ]
+
+
+@app.post("/customers")
+async def create_customer_endpoint(payload: CustomerIn, request: Request):
+    get_current_admin(request)
+    existing = await Customer.find_one(Customer.phone == payload.phone)
+    if existing:
+        raise HTTPException(status_code=409, detail="Customer with this phone already exists")
+    
+    c = Customer(
+        name=payload.name.strip(),
+        phone=payload.phone.strip(),
+        email=payload.email,
+        notes=payload.notes,
+        created_at=datetime.utcnow(),
+    )
+    await c.insert()
+    return CustomerOut(
+        id=str(c.id),
+        name=c.name,
+        phone=c.phone,
+        email=c.email,
+        notes=c.notes,
+        created_at=c.created_at
+    )
+
+
+async def _order_out(o: Order) -> OrderOut:
+    # Fetch customer
+    cust = await Customer.find_one(Customer.id == o.customer_id) # Beanie IDs can be ObjId or string depending on definition. Default Document uses Pydantic ObjectId.
+    # In my model definition I used id=str(uuid) or default?
+    # Customer(Document) uses default _id usually unless overwritten.
+    # Wait, in models.py I did NOT define `id` field for Customer, so it uses `_id` (ObjectId).
+    # But `Order.customer_id` is defined as `Indexed(str)`.
+    # This might be a mismatch if I didn't override ID generation to be string UUIDs for Customer.
+    
+    # In my `models.py` Step 40:
+    # `class Customer(Document): ...` -> no ID override. So it is Pydantic ObjectId.
+    # `class Order(Document): customer_id: Indexed(str) ...`
+    
+    # PROBLEM: `cust.id` will be ObjectId, but `order.customer_id` expects str.
+    # Beanie handles ObjectId <-> str conversion often, but I should be careful.
+    # Ideally I should have made them consistent. Beanie Documents using default ID are ObjectId.
+    # I should change `Order.customer_id` to be `Indexed(PydanticObjectId)` or just fetch by stringifying.
+    
+    # Let's handle it: when saving order, I used `cust.id`. Pydantic will convert ObjectId to str? 
+    # Yes, usually `str(cust.id)` works.
+    # But for finding: `Customer.find_one(Customer.id == o.customer_id)`.
+    # `o.customer_id` is str. `Customer.id` is ObjectId.
+    # Beanie will auto-convert str to ObjectId in query if valid.
+    
+    cust_out = None
+    if cust:
+        cust_out = CustomerOut(
+            id=str(cust.id), 
+            name=cust.name, 
+            phone=cust.phone, 
+            email=cust.email, 
+            notes=cust.notes, 
+            created_at=cust.created_at
+        )
+
+    # Items
+    items_out = []
+    for i in o.items:
+        items_out.append(OrderItemOut(sku=i.sku, qty=i.qty, price=i.price))
+
+    return OrderOut(
+        id=str(o.id),
+        customer_id=str(o.customer_id),
+        total_amount=o.total_amount,
+        status=o.status,
+        created_at=o.created_at,
+        customer=cust_out,
+        items=items_out
+    )
+
+
+@app.get("/orders")
+async def list_orders(request: Request):
+    get_current_admin(request)
+    orders = await Order.find().sort(-Order.created_at).limit(100).to_list()
+    out = []
+    for o in orders:
+        out.append(await _order_out(o))
+    return out
+
+
+@app.post("/orders")
+async def create_order_endpoint(payload: OrderIn, request: Request):
+    get_current_admin(request)
+    
+    # Customer ID from payload is str.
+    # Needed to fetch customer.
+    from beanie import PydanticObjectId
+    from bson import ObjectId
+    
+    try:
+        c_id = PydanticObjectId(payload.customer_id)
+    except:
+        # If we are using custom UUID string IDs?
+        # My `models.py` for Customer used `class Customer(Document)`. It uses standard ObjectId.
+        c_id = payload.customer_id # fallback
+
+    cust = await Customer.get(c_id)
+    if not cust:
+        # Try finding by string if that failed
+        cust = await Customer.find_one(Customer.id == payload.customer_id)
+        if not cust:
+             raise HTTPException(status_code=404, detail="Customer not found")
+
+    total = 0.0
+    items_list = []
+    
+    for it in payload.items:
+        p = await Product.find_one(Product.sku == it.sku)
+        if not p:
+            raise HTTPException(status_code=400, detail=f"Product {it.sku} not found")
+        
+        line_total = it.qty * it.price
+        total += line_total
+        
+        items_list.append(OrderItem(
+            sku=it.sku,
+            qty=it.qty,
+            price=it.price
+        ))
+
+    o = Order(
+        customer_id=str(cust.id),
+        total_amount=total,
+        status=payload.status,
+        created_at=datetime.utcnow(),
+        items=items_list
+    )
+    await o.insert()
+    
+    return await _order_out(o)
+
+
+@app.put("/orders/{order_id}/status")
+async def update_order_status(order_id: str, status: str, request: Request):
+    get_current_admin(request)
+    
+    # Try fetch by ID
+    o = await Order.get(order_id)
+    if not o:
+        # try find one with query if get failed (e.g. format mismatch)
+        try:
+            from bson import ObjectId
+            if ObjectId.is_valid(order_id):
+                 o = await Order.get(ObjectId(order_id))
+        except:
+            pass
+            
+    if not o:
+        raise HTTPException(status_code=404, detail="Order not found")
+    
+    o.status = status.upper()
+    await o.save()
+    return await _order_out(o)

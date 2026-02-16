@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Virtual Try-On Demo</title>
+    <style>
+        body { font-family: sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; text-align: center; }
+        .container { display: flex; flex-direction: column; gap: 20px; align-items: center; }
+        .inputs { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+        input { padding: 10px; border: 1px solid #ccc; border-radius: 5px; }
+        button { padding: 10px 20px; background-color: #007bff; color: white; border: none; border-radius: 5px; cursor: pointer; }
+        button:hover { background-color: #0056b3; }
+        #result { margin-top: 20px; max-width: 100%; border: 1px solid #ddd; min-height: 200px; display: flex; align-items: center; justify-content: center; }
+        img { max-width: 100%; height: auto; }
+        .loading { color: #666; font-style: italic; }
+    </style>
+</head>
+<body>
+    <h1>AI Virtual Try-On</h1>
+    <p>Upload a selfie and enter a Product SKU to try it on virtually.</p>
+    
+    <div class="container">
+        <div class="inputs">
+            <input type="text" id="sku" placeholder="Enter Product SKU (e.g. NK-001)" required>
+            <input type="file" id="photo" accept="image/*" required>
+            <button onclick="tryOn()">Try On Now</button>
+        </div>
+        
+        <div id="result">
+            <p>Result will appear here...</p>
+        </div>
+    </div>
+
+    <script>
+        async function tryOn() {
+            const sku = document.getElementById('sku').value;
+            const photo = document.getElementById('photo').files[0];
+            const resultDiv = document.getElementById('result');
+
+            if (!sku || !photo) {
+                alert("Please enter a SKU and select a photo.");
+                return;
+            }
+
+            resultDiv.innerHTML = '<p class="loading">Processing... please wait (runs on CPU)</p>';
+
+            const formData = new FormData();
+            formData.append('sku', sku);
+            formData.append('file', photo);
+
+            try {
+                const response = await fetch('/try-on', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                if (!response.ok) {
+                    const err = await response.json();
+                    throw new Error(err.detail || 'Try-on failed');
+                }
+
+                const blob = await response.blob();
+                const url = URL.createObjectURL(blob);
+                resultDiv.innerHTML = `<img src="${url}" alt="Virtual Try-On Result">`;
+            } catch (error) {
+                resultDiv.innerHTML = `<p style="color: red;">Error: ${error.message}</p>`;
+            }
+        }
+    </script>
+</body>
+</html>

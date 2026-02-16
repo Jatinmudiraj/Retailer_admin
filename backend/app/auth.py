@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from typing import Optional, Tuple
+from typing import Optional
 
 import jwt
 import bcrypt
@@ -11,10 +11,14 @@ from google.oauth2 import id_token
 
 from app.config import get_settings
 from app.schemas import AdminUser
+# Import Customer only inside function to avoid circular imports if needed, 
+# but models are usually safe to import if they don't import auth.
+# However, let's keep it safe.
 
 settings = get_settings()
 
 COOKIE_NAME = "admin_session"
+CUSTOMER_COOKIE_NAME = "royaliq_customer_session"
 
 
 def _allowed_email(email: str) -> bool:
@@ -38,6 +42,7 @@ def _allowed_email(email: str) -> bool:
 def get_password_hash(password: str) -> str:
     pwd_bytes = password.encode('utf-8')
     salt = bcrypt.gensalt()
+    # hashpw returns bytes
     hashed = bcrypt.hashpw(pwd_bytes, salt)
     return hashed.decode('utf-8')
 
@@ -45,6 +50,7 @@ def get_password_hash(password: str) -> str:
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     pwd_bytes = plain_password.encode('utf-8')
     hashed_bytes = hashed_password.encode('utf-8')
+    # checkpw expects bytes
     return bcrypt.checkpw(pwd_bytes, hashed_bytes)
 
 
@@ -82,6 +88,7 @@ def make_session_token(user: AdminUser, ttl_seconds: int = 24 * 3600) -> str:
 
 def read_session_token(token: str) -> AdminUser:
     try:
+        # decode returns dict
         payload = jwt.decode(token, settings.JWT_SECRET, algorithms=["HS256"])
     except Exception:
         raise HTTPException(status_code=401, detail="Invalid session token")
@@ -99,13 +106,14 @@ def get_current_admin(request: Request) -> AdminUser:
         raise HTTPException(status_code=401, detail="Not authenticated")
     return read_session_token(token)
 
-CUSTOMER_COOKIE_NAME = "royaliq_customer_session"
 
-def get_current_customer(request: Request, db: Session) -> "Customer":
+async def get_current_customer(request: Request) -> "Customer":
     """
     Dependency to get current logged in customer from cookie.
+    Async because it hits MongoDB.
     """
     from app.models import Customer
+    
     token = request.cookies.get(CUSTOMER_COOKIE_NAME, "").strip()
     if not token:
         raise HTTPException(status_code=401, detail="Not authenticated")
@@ -119,7 +127,7 @@ def get_current_customer(request: Request, db: Session) -> "Customer":
     if not phone:
         raise HTTPException(status_code=401, detail="Invalid token")
     
-    cust = db.query(Customer).filter(Customer.phone == phone).first()
+    cust = await Customer.find_one(Customer.phone == phone)
     if not cust:
          raise HTTPException(status_code=401, detail="Customer not found")
     

@@ -2,9 +2,8 @@ fastapi==0.115.6
 uvicorn==0.30.6
 gunicorn==23.0.0
 python-dotenv==1.0.1
-SQLAlchemy==2.0.35
-psycopg2-binary==2.9.9
-sqlalchemy-cockroachdb==2.0.2
+beanie==1.27.0
+motor==3.6.0
 pydantic==2.9.2
 pydantic-settings==2.5.2
 python-multipart==0.0.12
