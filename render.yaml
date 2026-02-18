@@ -15,8 +15,6 @@ services:
         sync: false
     autoDeploy: false
 
-    autoDeploy: false
-
 # Frontend Service (Static Site)
 staticSites:
   - name: royaliq-frontend
