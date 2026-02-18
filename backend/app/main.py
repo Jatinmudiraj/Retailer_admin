@@ -144,6 +144,10 @@ app.mount("/media", StaticFiles(directory=str(MEDIA_DIR)), name="media")
 # -----------------------
 # Helpers (Async)
 # -----------------------
+from app.routers import procurement, shop
+app.include_router(procurement.router, prefix="/procurement", tags=["Procurement"])
+app.include_router(shop.router, prefix="/shop", tags=["Shop"])
+
 import time
 
 # In-memory cache for gold rate

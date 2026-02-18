@@ -9,6 +9,7 @@ import Dashboard from "./pages/Dashboard";
 import Vault from "./pages/Vault";
 import BatchSourcing from "./pages/BatchSourcing";
 import Intelligence from "./pages/Intelligence";
+import Procurement from "./pages/Procurement";
 
 import SalesArchive from "./pages/SalesArchive";
 import AddProduct from "./pages/AddProduct";
@@ -156,6 +157,16 @@ export default function App() {
                                 <Protected user={user}>
                                     <Layout user={user!}>
                                         <Orders />
+                                    </Layout>
+                                </Protected>
+                            }
+                        />
+                        <Route
+                            path="/procurement"
+                            element={
+                                <Protected user={user}>
+                                    <Layout user={user!}>
+                                        <Procurement />
                                     </Layout>
                                 </Protected>
                             }

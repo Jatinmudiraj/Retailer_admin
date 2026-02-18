@@ -1,5 +1,26 @@
-Testing Bucket: retail-app-bucket58, Region: eu-north-1
-Uploading test_verification_001.txt...
-Upload Successful.
-Cleanup Successful.
-RESULT: SUCCESS
+Generated 274 recommendations.
+SKU: Gold_Necklace_Tanishq_1, Name: Yellow Gold Necklace - Celestial
+  Stock: 1, Demand: 0
+  Rec: Monitor (gray)
+  Reason: Stock levels are healthy.
+------------------------------
+SKU: Gold_Necklace_Tanishq_2, Name: Yellow Gold Necklace - Floral with Diamond
+  Stock: 1, Demand: 0
+  Rec: Monitor (gray)
+  Reason: Stock levels are healthy.
+------------------------------
+SKU: Gold_Necklace_Tanishq_3, Name: Yellow Gold Necklace - Geometric with Diamond
+  Stock: 1, Demand: 0
+  Rec: Monitor (gray)
+  Reason: Stock levels are healthy.
+------------------------------
+SKU: Gold_Necklace_Tanishq_4, Name: Yellow Gold Necklace - Geometric with Diamond
+  Stock: 1, Demand: 0
+  Rec: Monitor (gray)
+  Reason: Stock levels are healthy.
+------------------------------
+SKU: Gold_Necklace_Tanishq_5, Name: Yellow Gold Necklace - Geometric with Diamond
+  Stock: 1, Demand: 0
+  Rec: Monitor (gray)
+  Reason: Stock levels are healthy.
+------------------------------

@@ -17,6 +17,7 @@ export default function Layout(props: { user: AdminUser; children: React.ReactNo
         { path: "/vault", label: "Vault & Concepts" },
         { path: "/products/add", label: "Add Product" },
         { path: "/batch", label: "Batch Sourcing" },
+        { path: "/procurement", label: "Procurement Plan" },
         { path: "/intelligence", label: "Intelligence" },
         { path: "/sales", label: "Sales Archive" },
         { path: "/customers", label: "Customers" },
