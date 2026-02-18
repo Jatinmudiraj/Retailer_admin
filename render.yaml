@@ -1,5 +1,4 @@
 services:
-  # Backend Service
   - type: web
     name: royaliq-backend
     env: python
@@ -15,7 +14,6 @@ services:
         sync: false
     autoDeploy: false
 
-# Frontend Service (Static Site)
 staticSites:
   - name: royaliq-frontend
     buildCommand: cd frontend && npm install && npm run build
