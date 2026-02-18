@@ -1,23 +1,42 @@
 services:
+  # Backend Service (Python/FastAPI)
   - type: web
     name: royaliq-backend
     env: python
-    region: singapore
+    region: singapore # or ohio, frankfurt, etc.
+    plan: free
     buildCommand: pip install -r backend/requirements.txt
     startCommand: cd backend && uvicorn app.main:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: PYTHON_VERSION
-        value: 3.10.0
-      - key: MONGODB_URL
+        value: 3.11.0
+      - key: MONGODB_URI
         sync: false
       - key: SECRET_KEY
+        sync: false # User must set this in dashboard
+      - key: GOOGLE_CLIENT_ID
         sync: false
-    autoDeploy: false
+      - key: AWS_ACCESS_KEY_ID
+        sync: false
+      - key: AWS_SECRET_ACCESS_KEY
+        sync: false
+      - key: S3_BUCKET_NAME
+        sync: false
+      - key: S3_REGION
+        sync: false
 
-staticSites:
-  - name: royaliq-frontend
+  # Frontend Service (Static Site)
+  - type: static
+    name: royaliq-frontend
+    env: static
+    region: singapore
+    plan: free
     buildCommand: cd frontend && npm install && npm run build
-    publishPath: frontend/dist
+    staticPublishPath: frontend/dist
+    routes:
+      - type: rewrite
+        source: /*
+        destination: /index.html
     envVars:
       - key: VITE_API_BASE_URL
         fromService:
