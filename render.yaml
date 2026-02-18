@@ -3,7 +3,7 @@ services:
   - type: web
     name: royaliq-backend
     env: python
-    region: singapore # or ohio, frankfurt, etc.
+    region: singapore
     plan: free
     buildCommand: pip install -r backend/requirements.txt
     startCommand: cd backend && uvicorn app.main:app --host 0.0.0.0 --port $PORT
@@ -13,7 +13,7 @@ services:
       - key: MONGODB_URI
         sync: false
       - key: SECRET_KEY
-        sync: false # User must set this in dashboard
+        sync: false
       - key: GOOGLE_CLIENT_ID
         sync: false
       - key: AWS_ACCESS_KEY_ID
@@ -25,14 +25,13 @@ services:
       - key: S3_REGION
         sync: false
 
+staticSites:
   # Frontend Service (Static Site)
-  - type: static
-    name: royaliq-frontend
-    env: static
+  - name: royaliq-frontend
     region: singapore
     plan: free
     buildCommand: cd frontend && npm install && npm run build
-    staticPublishPath: frontend/dist
+    publishDir: frontend/dist
     routes:
       - type: rewrite
         source: /*
