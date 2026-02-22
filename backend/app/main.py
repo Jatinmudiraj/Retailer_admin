@@ -501,7 +501,7 @@ async def customer_signup(payload: CustomerSignupIn):
     }
     token = jwt.encode(token_payload, settings.JWT_SECRET, algorithm="HS256")
 
-    resp = JSONResponse({"ok": True, "user": {"id": cust.id, "name": cust.name, "phone": cust.phone}})
+    resp = JSONResponse({"ok": True, "user": {"id": str(cust.id), "name": cust.name, "phone": cust.phone}})
     resp.set_cookie(
         key=CUSTOMER_COOKIE_NAME,
         value=token,
@@ -534,7 +534,7 @@ async def customer_login(payload: CustomerLoginIn):
     }
     token = jwt.encode(token_payload, settings.JWT_SECRET, algorithm="HS256")
 
-    resp = JSONResponse({"ok": True, "user": {"id": cust.id, "name": cust.name, "phone": cust.phone}})
+    resp = JSONResponse({"ok": True, "user": {"id": str(cust.id), "name": cust.name, "phone": cust.phone}})
     resp.set_cookie(
         key=CUSTOMER_COOKIE_NAME,
         value=token,
@@ -577,7 +577,7 @@ async def customer_google_auth(payload: CustomerGoogleAuthIn):
         resp = JSONResponse({
             "ok": True, 
             "status": "success",
-            "user": {"id": cust.id, "name": cust.name, "phone": cust.phone}
+            "user": {"id": str(cust.id), "name": cust.name, "phone": cust.phone}
         })
         resp.set_cookie(
             key=CUSTOMER_COOKIE_NAME,
