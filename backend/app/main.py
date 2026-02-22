@@ -120,8 +120,9 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="RoyalIQ Retailer Admin", version="1.0", lifespan=lifespan)
 
-# Handle Render's "host" property
+# Handle CORS
 origins = [
+    settings.FRONTEND_ORIGIN,
     "https://royaliq-frontend.onrender.com",
     "http://localhost:5173",
     "http://localhost:3000",
